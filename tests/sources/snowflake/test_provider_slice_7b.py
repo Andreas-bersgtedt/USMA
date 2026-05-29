@@ -9,12 +9,11 @@ Slice 7-B introduced the real provider with key-pair JWT auth; Slice
 """
 from __future__ import annotations
 
-import io
 import json
 import sys
 import types
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 

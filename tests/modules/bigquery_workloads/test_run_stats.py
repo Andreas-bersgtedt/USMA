@@ -297,7 +297,6 @@ def test_aggregate_jobs_by_day_buckets_by_utc_date():
 
 
 def test_aggregate_jobs_by_day_skips_jobs_without_start_time():
-    now = datetime(2026, 5, 22, tzinfo=timezone.utc)
     j = BigQueryJob(
         job_id="x", project_id=PROJECT, location="us", job_type="QUERY",
         outcome="cancelled", start_time=None, end_time=None,

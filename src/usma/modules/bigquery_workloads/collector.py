@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable, Iterator
+from typing import Any, Iterator
 
 from .fabric_compat import classify_routine, classify_table
 from .models import (

@@ -242,7 +242,7 @@ def write_reports(
                 continue
             top = items[:25]
             lines.append(f"## {label}")
-            lines.append(f"| Name | Support |")
+            lines.append("| Name | Support |")
             lines.append("|---|---|")
             for obj in top:
                 lines.append(f"| {obj.full_name} | {obj.support} |")

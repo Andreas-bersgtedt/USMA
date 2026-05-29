@@ -19,7 +19,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from usma.config import AppConfig, AzureConfig, SqlConfig
 from usma.modules.cost.analyzer import CostAnalyzer

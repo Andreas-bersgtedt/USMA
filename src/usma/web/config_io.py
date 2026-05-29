@@ -716,8 +716,8 @@ def discover_bigquery_projects(env_file: Path) -> tuple[list[ConfigCheck], list[
         return checks, workspaces
 
     try:
-        # creds=None → BigQueryProvider.discover() uses google.auth.default()
-        # (ADC). subscription_id is ignored by the provider (# noqa: ARG002).
+        # creds=None -> BigQueryProvider.discover() uses google.auth.default()
+        # (ADC). subscription_id is ignored by the provider.
         descriptors = provider.discover(None)
     except Exception as exc:  # noqa: BLE001
         # ADC missing, Cloud Resource Manager 403, missing [bigquery] extra,

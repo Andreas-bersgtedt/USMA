@@ -8,8 +8,6 @@ import pytest
 from usma.modules.snowflake_workloads.models import (
     Routine,
     SnowflakeJob,
-    SnowflakeJobWindowStats,
-    SnowflakeWarehouseWindowStats,
     Table,
     Warehouse,
 )

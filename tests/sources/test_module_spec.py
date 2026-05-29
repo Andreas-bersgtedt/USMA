@@ -4,7 +4,6 @@ from __future__ import annotations
 from usma.modules import MODULE_REGISTRY, KNOWN_MODULES
 from usma.modules.spec import (
     MODULE_SPECS,
-    ModuleSpec,
     applicable_modules,
 )
 from usma.sources import SourceType

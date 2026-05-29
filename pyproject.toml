@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "unified-synapse-migration-analyzer"
-version = "5.2.0"
+version = "5.2.1"
 description = "Analyze Azure Synapse Analytics workspaces to assess Microsoft Fabric Warehouse migration readiness."
 readme = "README.md"
 requires-python = ">=3.12"

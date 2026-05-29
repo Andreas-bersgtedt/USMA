@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 from contextlib import closing
 from datetime import datetime, timezone
-from typing import Any, Callable, Iterable, Iterator
+from typing import Any, Callable, Iterator
 
 from .fabric_compat import classify_object, classify_routine, classify_table
 from .models import (

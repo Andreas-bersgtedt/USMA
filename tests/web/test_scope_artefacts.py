@@ -8,7 +8,6 @@ Covers:
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import time
 from pathlib import Path
@@ -20,7 +19,6 @@ from fastapi.testclient import TestClient
 from usma.web.app import create_app
 from usma.web.deps import get_state
 from usma.web.jobs import JobRunner
-from usma.web.schemas import ScopeRef
 from usma.web.storage import FilesystemRunRepo
 
 

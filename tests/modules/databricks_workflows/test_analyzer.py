@@ -1,7 +1,6 @@
 """Tests for ``modules.databricks_workflows`` (Phase 4 Slice 4-B)."""
 from __future__ import annotations
 
-import types
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock

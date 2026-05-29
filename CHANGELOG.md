@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.2.1] - 2026-05-29
+
+### Fixed
+- **Ruff lint clean-up.** Removed unused imports across the `bigquery_workloads`,
+  `snowflake_workloads`, `databricks` AWS provider, web `config_io`, and test
+  modules; dropped stray `f`-prefixes on placeholder-free strings; removed an
+  unused local in the Snowflake analyzer and a couple of tests; corrected an
+  invalid `# noqa` directive in `web/config_io.py`. No behaviour change.
+
 ## [5.2.0] - 2026-05-29
 
 ### Changed

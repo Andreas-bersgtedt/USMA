@@ -163,7 +163,6 @@ def test_check_scopes_validates_each_configured_scope(monkeypatch, tmp_path) -> 
     from usma import sources as sources_pkg
     from usma.sources import (
         ConfigCheck,
-        Credentials,
         SourceDescriptor,
         SourceType,
     )

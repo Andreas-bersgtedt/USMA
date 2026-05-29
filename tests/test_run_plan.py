@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from usma.modules.run_plan import (
-    PlannedTask,
     RunPlan,
     SkippedTask,
     plan_run,

@@ -92,7 +92,7 @@ def _fake_descriptor(name: str = "dbx-prod") -> SourceDescriptor:
         subscription_id="33333333-3333-3333-3333-333333333333",
         resource_group="rg-data",
         location="eastus",
-        extras={"workspace_url": f"adb-1234.5.azuredatabricks.net"},
+        extras={"workspace_url": "adb-1234.5.azuredatabricks.net"},
     )
 
 

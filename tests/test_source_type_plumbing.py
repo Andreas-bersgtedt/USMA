@@ -17,7 +17,6 @@ import os
 from pathlib import Path
 from unittest import mock
 
-import pytest
 
 from usma.config import load_config
 from usma.sources import SourceType

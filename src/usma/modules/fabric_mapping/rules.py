@@ -1553,8 +1553,8 @@ def rules_for_bigquery_workloads(
                 effort='low',
                 target=bucket,
                 detail=(
-                    f'Observed via Cloud Logging audit-log mining over the '
-                    f'configured lookback window.'
+                    'Observed via Cloud Logging audit-log mining over the '
+                    'configured lookback window.'
                 ),
                 fabric_action=f'Replatform target: {mapping}.',
             ))

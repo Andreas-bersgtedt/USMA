@@ -11,7 +11,6 @@ import sys
 import types
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -315,7 +314,7 @@ def test_cost_analyzer_azure_path_unchanged(monkeypatch, tmp_path):
     )
     descriptor = SourceDescriptor(
         type=SourceType.SYNAPSE_WORKSPACE,
-        id=f"/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Synapse/workspaces/ws",
+        id="/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Synapse/workspaces/ws",
         display_name="ws", subscription_id="sub", resource_group="rg",
     )
     cfg = AppConfig(azure=azure, sql=SqlConfig(), output_dir=tmp_path, scopes=(descriptor,))

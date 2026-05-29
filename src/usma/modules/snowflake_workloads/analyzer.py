@@ -179,7 +179,7 @@ class SnowflakeWorkloadsAnalyzer:
         # databases/schemas/tables/views/functions/procedures —
         # everything except per-schema objects (stages/streams/tasks/
         # pipes) which Snowflake does not expose at the account level.
-        used_fallback = self._maybe_use_account_usage_fallback(result)
+        self._maybe_use_account_usage_fallback(result)
 
         # ----- jobs ----------------------------------------------------
         if self._collect_jobs:
