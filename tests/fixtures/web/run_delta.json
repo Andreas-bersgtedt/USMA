@@ -1,0 +1,17 @@
+{
+  "previous_run": "2026-04-15T10:00:00+00:00",
+  "current_run": "2026-05-01T00:00:00+00:00",
+  "generated_at": "2026-05-01T00:00:01+00:00",
+  "artifacts": [
+    {
+      "module": "fabric_mapping",
+      "path": "fabric_mapping.json",
+      "status": "changed",
+      "size_bytes": 12345,
+      "sha256": "deadbeefcafebabe",
+      "record_count": 17,
+      "record_count_delta": 2
+    }
+  ],
+  "notes": ["Two new code objects detected vs. previous run."]
+}

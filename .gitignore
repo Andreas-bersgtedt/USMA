@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.env.local
+
+# Build / dist
+build/
+dist/
+
+# Tooling
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.idea/
+
+# Tool outputs
+output/
+reports/
+*.log
+
+.pytest-tmp/
+
+.pytest_tmp/

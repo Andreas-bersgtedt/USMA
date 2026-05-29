@@ -1,0 +1,65 @@
+{
+  "_comment": "Phase 2 ADF sample fixture. Mirrors the shape returned by azure.mgmt.datafactory.DataFactoryManagementClient: factory metadata + paged list_by_factory() responses for pipelines (with activities inline), linked services, datasets, triggers, and integration runtimes. The integration test in tests/test_pipelines_analyzer_dispatch.py loads this file and feeds it to a fake AdfCollector to exercise the analyzer's source-agnostic dispatch path.",
+  "factory": {
+    "id": "/subscriptions/sub-fixture/resourceGroups/rg-fixture/providers/Microsoft.DataFactory/factories/adf-fixture",
+    "name": "adf-fixture",
+    "location": "westeurope",
+    "public_network_access": "Enabled",
+    "version": "2018-06-01"
+  },
+  "pipelines": [
+    {
+      "name": "LoadSales",
+      "folder": {"name": "Sales"},
+      "activities": [
+        {
+          "name": "CopyToWarehouse",
+          "type": "Copy",
+          "depends_on": [],
+          "typeProperties": {
+            "source": {"type": "AzureSqlSource"},
+            "sink": {"type": "AzureSqlSink"}
+          }
+        },
+        {
+          "name": "RunStored",
+          "type": "SqlServerStoredProcedure",
+          "depends_on": [{"activity": "CopyToWarehouse"}],
+          "typeProperties": {"storedProcedureName": "dbo.RefreshAgg"}
+        }
+      ]
+    },
+    {
+      "name": "BuildAggregates",
+      "folder": null,
+      "activities": [
+        {
+          "name": "ExecuteChild",
+          "type": "ExecutePipeline",
+          "depends_on": [],
+          "typeProperties": {"pipeline": {"referenceName": "LoadSales", "type": "PipelineReference"}}
+        }
+      ]
+    }
+  ],
+  "linked_services": [
+    {"name": "ls_azuresql_dwh", "type": "AzureSqlDatabase"},
+    {"name": "ls_blob_landing", "type": "AzureBlobStorage"}
+  ],
+  "datasets": [
+    {"name": "ds_sales_src", "type": "AzureSqlTable", "linked_service_name": "ls_azuresql_dwh"},
+    {"name": "ds_sales_dst", "type": "AzureSqlTable", "linked_service_name": "ls_azuresql_dwh"}
+  ],
+  "triggers": [
+    {
+      "name": "tr_daily_2am",
+      "type": "ScheduleTrigger",
+      "typeProperties": {
+        "recurrence": {"frequency": "Day", "interval": 1, "startTime": "2026-01-01T02:00:00Z"}
+      }
+    }
+  ],
+  "integration_runtimes": [
+    {"name": "AutoResolveIntegrationRuntime", "type": "Managed"}
+  ]
+}

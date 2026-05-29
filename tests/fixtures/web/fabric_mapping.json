@@ -1,0 +1,51 @@
+{
+  "workspace_name": "demo-ws",
+  "generated_at": "2026-05-01T00:00:00+00:00",
+  "inputs": [
+    {
+      "module": "dedicated_pools",
+      "source_file": "dedicated_pools.json",
+      "counts": {"pools": 1, "schemas": 3, "tables": 12, "code_objects": 7}
+    }
+  ],
+  "recommendations": [
+    {
+      "id": "rec-001",
+      "area": "tsql",
+      "title": "Replace heap fact tables",
+      "severity": "blocker",
+      "effort": "high",
+      "target": "schema.dbo.fact_orders",
+      "detail": "Heap distribution will not migrate to Fabric Warehouse.",
+      "fabric_action": "Create as CCI."
+    }
+  ],
+  "readiness": {
+    "score": 72,
+    "bucket": "ready-with-effort",
+    "counts": {"blocker": 1, "warning": 3, "info": 5},
+    "top_blockers": [],
+    "tsql_compatibility_pct": 88.5,
+    "tsql_objects_total": 17,
+    "tsql_objects_incompatible": 2,
+    "tsql_objects_needs_review": 3
+  },
+  "runbook": [
+    {
+      "phase": "1-prepare",
+      "order": 1,
+      "title": "Inventory",
+      "detail": "Run sma analyze-all.",
+      "severity": "info",
+      "effort": "low"
+    }
+  ],
+  "capacity_projection": {
+    "peak_dwu": 1500,
+    "peak_dwu_with_headroom": 1950,
+    "estimated_cu": 32,
+    "recommended_sku": "F32",
+    "headroom_pct": 30,
+    "notes": ["Peak observed during month-end close."]
+  }
+}

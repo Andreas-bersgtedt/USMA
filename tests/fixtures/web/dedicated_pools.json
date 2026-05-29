@@ -1,0 +1,69 @@
+{
+  "workspace_name": "demo-ws",
+  "generated_at": "2026-05-01T00:00:00+00:00",
+  "pools": [
+    {
+      "inventory": {
+        "name": "dwh01",
+        "status": "Online",
+        "location": "westeurope",
+        "collation": "SQL_Latin1_General_CP1_CI_AS"
+      },
+      "tables": [],
+      "schemas": [],
+      "code_objects": [
+        {
+          "schema_name": "dbo",
+          "object_name": "usp_load_orders",
+          "object_type": "SQL_STORED_PROCEDURE",
+          "code_object_id": "dbo.usp_load_orders.sql_stored_procedure",
+          "parameter_count": 1,
+          "compatibility": "needs_review",
+          "gap_count": 1,
+          "gap_severities": ["warning"]
+        },
+        {
+          "schema_name": "dbo",
+          "object_name": "vw_orders_today",
+          "object_type": "VIEW",
+          "code_object_id": "dbo.vw_orders_today.view",
+          "parameter_count": 0,
+          "compatibility": "compatible",
+          "gap_count": 0,
+          "gap_severities": []
+        },
+        {
+          "schema_name": "dbo",
+          "object_name": "fn_revenue",
+          "object_type": "SQL_SCALAR_FUNCTION",
+          "code_object_id": "dbo.fn_revenue.sql_scalar_function",
+          "parameter_count": 1,
+          "compatibility": "incompatible",
+          "gap_count": 2,
+          "gap_severities": ["blocker", "warning"]
+        },
+        {
+          "schema_name": "dbo",
+          "object_name": "tvf_top_customers",
+          "object_type": "SQL_INLINE_TABLE_VALUED_FUNCTION",
+          "code_object_id": "dbo.tvf_top_customers.sql_inline_table_valued_function",
+          "parameter_count": 1,
+          "compatibility": "needs_review",
+          "gap_count": 1,
+          "gap_severities": ["warning"]
+        }
+      ],
+      "code_object_summary": {
+        "total": 4,
+        "by_type": {"procedure": 1, "view": 1, "scalar_function": 1, "inline_tvf": 1},
+        "by_compatibility": {"compatible": 1, "needs_review": 2, "incompatible": 1},
+        "compatibility_pct": 25.0,
+        "incompatible_object_ids": ["dbo.fn_revenue.sql_scalar_function"],
+        "needs_review_object_ids": [
+          "dbo.tvf_top_customers.sql_inline_table_valued_function",
+          "dbo.usp_load_orders.sql_stored_procedure"
+        ]
+      }
+    }
+  ]
+}
