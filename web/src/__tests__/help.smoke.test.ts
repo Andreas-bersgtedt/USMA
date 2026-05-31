@@ -3,7 +3,7 @@ import { CHAPTERS, CHAPTERS_BY_SLUG } from "../help/chapters";
 
 describe("user-guide chapters", () => {
   it("loads every chapter with non-empty body", () => {
-    expect(CHAPTERS.length).toBe(30);
+    expect(CHAPTERS.length).toBe(31);
     for (const c of CHAPTERS) {
       expect(c.slug, `slug for ${c.title}`).toMatch(/^[A-Za-z0-9_-]+$/);
       expect(c.body.length, `body for ${c.slug}`).toBeGreaterThan(50);
