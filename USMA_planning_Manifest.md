@@ -15,12 +15,13 @@
 | 0 | Decisions + scaffolding | **🟢 decisions locked** | Scaffolding skeleton landed; D1–D10 all signed off 2026-05-19. PR merge to `main` is the last open item. |
 | 1 | Foundational refactor (no new source) | **🟢 backend complete** | Provider + scopes + plan_run + manifest v2 shipped. Phase-1.5 carve-out (CLI `--scope`, SourcePicker wiring, MODULE_SPECS callers) tracked separately. |
 | 2 | ADF as second source | **🟢 end-to-end** | Single-source ADF SPA path is fully green: Configuration radio + factory discovery + REPLACE UX + run-page module gating + ADF run-history client (counts / success / daily+hourly status). Multi-scope plumbing now reaches the SPA: backend per-scope dispatch (2.7-A), scope-aware artefact serving + `/scopes` route (2.7-B), and SPA `loadModulePerScope()` (2.7-C). Phase 3 UI can fan out across scopes without further plumbing. |
-| 2.7 | Multi-scope analyzer dispatch | **🟡 backend dispatch in** | `JobRunner._run` per-scope loop + per-scope subdirs landed (commit `2bceef6`, 7 new tests, 428 total). Backend artefact serving (2.7-B) + SPA loader (2.7-C) remaining before Phase 3 UI can light up. |
-| 3 | Unified UI polish | **🟢 UI complete** | All Phase-3 UI slices landed including source-platform alignment (A–D, 2026-05-20): backend `Recommendation.source_type` + ADF-aware rules/runbook, Dashboard / Recommendations / Runbook / EstateOverview chrome speak "factory" vs "workspace" per source. Only the deferred package directory rename to `usma/` with `DeprecationWarning` shim remains — standalone PR per ADR 0004. |
+| 2.7 | Multi-scope analyzer dispatch | **� complete** | All three slices shipped: 2.7-A `JobRunner._run` per-scope loop + per-scope subdirs (`2bceef6`); 2.7-B scope-aware artefact serving + `/scopes` route; 2.7-C SPA `loadModulePerScope()`. Phase 3 UI fans out across scopes without further plumbing. |
+| 3 | Unified UI polish | **🟢 complete** | All Phase-3 UI slices landed including source-platform alignment (A–D, 2026-05-20). Deferred package directory rename to `usma/` with `DeprecationWarning` shim shipped per ADR-0004 (working tree is now `src/usma/`; brand rename to "Unified Solution Migration Analyzer" landed in `fe01d14`, 5.x.x). |
 | 4 | Databricks | **🟢 Complete (alpha)** | Slices 4-A through 4-F-2 shipped (commits `4e65dbc`, `5cff105`, `bba5cbc`, `3a22c3b`, `d4d67b3`, `5d594bd`, `3cb6cf3`→`ebc3737`, `7a26cd8`, `bc190b5`; 524 total tests). Backend provider + `databricks_workflows` module + cost/fabric_mapping widening + SPA Configuration / Run page + user-guide docs + run-history vCore-hour collection + Dashboard tiles & charts + Estate Overview CU rollup all landed. DLT / Unity Catalog deferred to Phase 4.6; **Databricks on AWS** scoped as Phase 4.7. |
 | 4.7 | Databricks on AWS (multi-cloud) | ⚪ not started | Scoped 2026-05-27 (Option A — sibling provider + `extras["platform"]` discriminator; reuses the entire `databricks_workflows` module unchanged). 6 slices (4.7-A → 4.7-F); ~2–4 dev-days for alpha. Cost on AWS deferred to Phase 4.7.5. |
 | 5 | Google BigQuery | **🟢 Complete (alpha)** | Replaces previously-scoped SAP BW (deferred to Phase 6+). Slices 5-A through 5-J shipped: provider + `bigquery_workloads` module + slot→CU rollup + fabric_mapping + SPA Configuration + docs + estate-overview CU rollup + GCP cost client + browser ADC sign-in + Dashboard BigQuery section (headline tiles, side-by-side daily/hourly bar charts, GCS storage view, top-tables, breakdowns, sqlglot query-features). BigLake / Omni / BigQuery ML deep dive deferred. |
-| 7 | Snowflake | 🟡 in progress | Scoped 2026-05-28 after feasibility review against the Databricks integration surface. ~60% copy-paste-rename / 40% targeted edits; no architectural refactor needed (plugin seams already in place). 10 slices (7-A → 7-J) mirror the BigQuery shape. Snowflake-on-AWS is the primary target; Azure / GCP variants reuse the same provider via `extras["platform"]` discriminator (same pattern as Databricks 4.7). Cost (credit → USD via `SNOWFLAKE.ACCOUNT_USAGE.METERING_HISTORY`) deferred to Slice 7-H. |
+| 7 | Snowflake | **🟢 Complete (alpha)** | Slices 7-A through 7-J shipped (`c75bf34` module, `8961bc5` credit→vCore→CU rollup, `6e5199d`/`3a04b2d`/`02cf073`/`81bba2a` SPA Config + browser OAuth, `fc41c28` estate rollup + docs + cost client, `5f80048` dashboard section, `459a6d5` 7-day daily + hourly bars), plus production hardening (`50d1723` IMPORTED-PRIVILEGES role fallback, `4fdc2a7` credits-only degradation, `b2e3b32`/`be6182d`/`b9bc900`/`8ff16d2` cost-finding wording + role diagnostics, `2ab35b9` load_config branch). Snowflake-on-AWS primary; Azure/GCP variants reuse the provider via `extras["platform"]`. ADR-0007 (auth model) and a Snowpark-driven scope inspection are the deferred bits. |
+| 5.3 | Cross-platform / packaging | **🟢 complete (5.3.x)** | OS-aware platform helpers in [src/usma/platform.py](src/usma/platform.py) (XDG on Linux/macOS, Known Folders on Windows), `default_odbc_driver()` with auto-fallback from driver 18 → 17, `odbc_install_hint()` per OS. [quickstart.sh](quickstart.sh) mirrors `quickstart.ps1` for Linux/macOS. QUICKSTART.md ships apt/brew install snippets for `msodbcsql18` and a Linux/macOS fast-path section. 14 new tests in [tests/test_platform.py](tests/test_platform.py). Shipped as 5.3.0 (`1859812`, `ed9522b`). |
 | 6+ | Subsequent sources | ⚪ not started | |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
@@ -365,6 +366,8 @@ Goal: Add Google BigQuery as a third cloud source alongside Synapse + Databricks
 
 ## Phase 7 — Snowflake
 
+**Status: 🟢 Complete (alpha) — 2026-05-30.** All ten slices (7-A → 7-J) shipped. Production hardening fixes for IMPORTED-PRIVILEGES-only roles, `USAGE_IN_CURRENCY_DAILY` unavailability (credits-only fallback), PUBLIC-role detection, refresh-token role binding, and scope-aware cost-finding wording all landed in the days that followed. Snowflake-on-AWS is the validated path; Azure/GCP variants reuse the provider via `extras["platform"]` discriminator. **Deferred:** ADR-0007 (auth model write-up — key-pair JWT vs External-OAuth-via-Entra), Snowpark-driven deep scope inspection, fine-grained `SNOWFLAKE.ACCOUNT_USAGE` least-privilege role recipe in the user guide.
+
 Goal: Add Snowflake as a fourth cloud source alongside Synapse / ADF / Databricks / BigQuery. Mirrors the Databricks (Phase 4) and BigQuery (Phase 5) slice shape so the existing UI/CLI/manifest plumbing carries Snowflake without architectural changes.
 
 **Feasibility review — 2026-05-28.** Audit of the Databricks integration surface (provider, collector, fabric compat, cost-skip, CLI scope shortcut, SPA Configuration radio + auth panel, env-var family, ADR, user-guide, ~21 test files) concluded: the plugin seams (`SourceProvider`, `SourceDescriptor` + `extras`, `MODULE_REGISTRY`, `fabric_mapping/rules.py` rule-per-artifact, Estate Overview cloud bucketing) hold cleanly for Snowflake. No prerequisite refactor. Hardcoded `"databricks"` strings (CLI scope parser, SPA radio, env-var family, doctor branches, labels, artifact filenames) get parallel `"snowflake"` additions next to them — mechanical, not structural. **Estimated effort:** ~3–4 focused weeks for full Databricks parity, **assuming auth model is decided early (Slice 7-A) and the compat matrix is signed off by a domain expert (Slice 7-C)**.
@@ -491,3 +494,48 @@ Goal: Add Snowflake as a fourth cloud source alongside Synapse / ADF / Databrick
 | 2026-05-20 | 4 | Phase 4 Slice 4-B — `databricks_workflows` module (commit `5cff105`): new sibling of `pipelines` per ADR D5. `modules/databricks_workflows/` ships `models.py` (Workflow / WorkflowTask / JobCluster / InteractiveCluster / DatabricksWorkflowsAnalysis), `collector.py` (`DatabricksWorkflowsCollector` walks `WorkspaceClient.jobs.list()` + `clusters.list()`, classifies task types + cluster references with duck-typed access so dict / SimpleNamespace / SDK enum payloads all work), `analyzer.py` (`DatabricksWorkflowsAnalyzer.for_descriptor()` builds a `WorkspaceClient` via `DatabricksProvider`), `reporting.py` (JSON / CSV / Markdown), and `fabric_compat.py` (coarse task-type → support label mapping — widened in Slice 4-C). Registered in `MODULE_REGISTRY` (between `fabric_validation` and `fabric_mapping`) + `MODULE_SPECS` with `supports={DATABRICKS}`. `test_run_plan.py` + `test_module_spec.py` updated to reflect that `databricks_workflows` is Databricks-only and that Synapse-scope runs now have one less applicable module. 11 new tests cover classification, collector walking, analyzer aggregation + descriptor validation, reporting, and registry wiring. **470 Python tests passing**. |
 | 2026-05-20 | 4 | Phase 4 Slice 4-A — `DatabricksProvider` (commit `4e65dbc`): replaced the Phase-0 stub with a real provider. `discover()` calls `azure.mgmt.databricks.AzureDatabricksManagementClient.workspaces.list_by_subscription()` and stamps `workspace_url` / `workspace_id` / `sku` / `managed_resource_group_id` into descriptor `extras`. `validate()` does an ARM Reader probe (`workspaces.get(rg, name)`) then a data-plane probe via `databricks.sdk.WorkspaceClient.current_user.me()` — AAD federation by default (`credentials_provider=lambda` returning `{"Authorization": f"Bearer {tok.token}"}` with `cred.get_token("2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default")`), PAT path when `DATABRICKS_TOKEN` is present in `creds.extras`. `make_clients()` returns a `DatabricksClientBundle` dataclass. `[databricks]` extra now pins `azure-mgmt-databricks>=2.0`. 12 new tests in `tests/sources/databricks/test_provider.py` (discover requires sub_id, ARM probe path, data-plane probe path, PAT path, ARM-failure short-circuit, missing workspace_url, bundle shape, descriptor validation, ARM-id parsing). Phase-0 `test_unimplemented_stubs_raise_on_discover` updated to drop DATABRICKS. **459 Python tests passing**. |
 | 2026-05-19 | 2.7 | Multi-scope dispatch — backend Commit A (commit `2bceef6`): `JobRunner._run` per-scope inner loop. When `len(meta.scopes) > 1`, each selected module executes once per scope into `run_dir/<source_type>__<slug>/` with `azure.workspace_name` / `azure.resource_group` swapped via `dataclasses.replace` and `SMA_SOURCE_TYPE` env stamped for the duration. Single-scope runs keep the legacy flat layout — zero regression for the 421-test baseline. Helpers `_scope_slug`, `_cfg_for_scope`, `_stamp_source_type_env`, `_is_multi_scope` live in `web/jobs.py`. 7 new tests in `tests/web/test_multi_scope_dispatch.py`. **428 Python tests passing**. Follow-ups 2.7-B (backend route + manifest writing) and 2.7-C (SPA loader scope-walking) unlock the user-visible Phase 3 UI work. |
+
+
+---
+
+## Phase 5.3 — Cross-platform / packaging
+
+**Status: 🟢 complete — 2026-05-31 (shipped as 5.3.0).**
+
+Goal: Make USMA run natively on Windows, Linux (Ubuntu Desktop tested), and macOS without per-host code paths leaking into module logic.
+
+### What landed
+
+- **New helper module** [src/usma/platform.py](src/usma/platform.py):
+  - `cache_dir()` / `config_dir()` / `data_dir()` — XDG Base Directory spec on Linux/macOS (honour `$XDG_CACHE_HOME`, `$XDG_CONFIG_HOME`, `$XDG_DATA_HOME`), `%LOCALAPPDATA%` / `%APPDATA%` on Windows.
+  - `default_odbc_driver()` — prefers `ODBC Driver 18 for SQL Server`, auto-falls back to driver 17 when only 17 is installed (covers older Ubuntu LTS).
+  - `odbc_install_hint()` — apt snippet on Linux, brew snippet on macOS, MSI link on Windows; surfaced by `sma doctor`.
+  - `default_runs_dir()` — `$SMA_RUNS_DIR` → `./runs` (if present) → OS per-user data dir.
+- **[quickstart.sh](quickstart.sh)** — Bash bootstrapper mirroring `quickstart.ps1` for Linux/macOS (clone, `python3.12 -m venv .venv`, install all extras, build SPA, run `sma doctor --offline`, launch `sma serve --with-api --static-dir web/dist`). Flags: `--skip-clone`, `--branch`, `--python`, `--skip-doctor`, `--skip-web-build`, `--no-serve`.
+- **[.gitattributes](.gitattributes)** — keeps `*.sh` LF on checkout so bash never sees CRLF.
+- **[QUICKSTART.md](QUICKSTART.md)** §0.1 ships ODBC install commands for Ubuntu/Debian (apt) and macOS (brew); §0.2 adds a "Fast path — `quickstart.sh` (Linux / macOS)" subsection.
+- **Wiring**: [src/usma/config.py](src/usma/config.py) defaults `SQL_ODBC_DRIVER` via `default_odbc_driver()`; [src/usma/doctor.py](src/usma/doctor.py) emits per-OS install hints; [src/usma/modules/cost/fabric_pricing.py](src/usma/modules/cost/fabric_pricing.py) cache path uses `platform.cache_dir()`; [src/usma/cli.py](src/usma/cli.py) `serve --with-api --runs-dir` default uses `default_runs_dir()`.
+- **Tests**: 14 new tests in [tests/test_platform.py](tests/test_platform.py) cover per-OS dir resolution, XDG overrides, runs-dir fallback chain, ODBC 18→17 fallback, and per-OS install-hint phrasing.
+
+### Deferred
+
+- Apple-native `~/Library/Caches` / `~/Library/Application Support` paths on macOS (currently uses XDG layout — easier dotfile sharing between Linux and macOS dev hosts).
+- CI matrix entry for `ubuntu-latest` and `macos-latest`.
+
+---
+
+## Recent housekeeping & bug-fix log (5.2.x – 5.3.x)
+
+Cumulative ship log for changes that aren't substantial enough for their own phase row.
+
+| Version | Commit | Change |
+|---|---|---|
+| 5.2.0 | `dd14f6d` | Help manifest: added chapters 16, 20–23, 21a, 99 + Sources section; fixed EstateOverview help link |
+| — | `fe01d14` | Brand rename: "Unified Synapse" → "Unified Solution Migration Analyzer" (USMA acronym preserved) |
+| — | `a7d63b7` | Estate Overview: removed "readiness over time" card |
+| — | `459a6d5` | Dashboard: Snowflake daily chart → 7 days; new SnowflakeHourlyBars (last 24h, mirrors BigQuery) |
+| 5.2.1 | `5af389c` / `00fc3fc` | Ruff lint clean-up (unused imports, stray f-prefixes, bad noqa) |
+| 5.3.0 | `1859812` + `ed9522b` | Cross-platform support (see Phase 5.3 above) |
+| 5.3.1 | `e99ab27` | Fix: `DELETE /api/runs/{id}/data` now stamps stale `running`/`queued` runs (no live worker) as `failed` and deletes them instead of 409-ing forever. Regression test in [tests/web/test_delete_stale_run.py](tests/web/test_delete_stale_run.py). |
+| 5.3.2 | `af100ce` | Fix: RunsHistory SPA Delete button enabled for stalled `running` runs (was disabled, making the 5.3.1 backend fix unreachable). Tooltip updated; SPA rebuilt. |
+

@@ -15,6 +15,7 @@ from . import __version__
 from .access_manifest import render_markdown as render_access_markdown
 from .config import AppConfig, load_config
 from .doctor import render_report, run_checks
+from .platform import default_runs_dir
 from .effort import default_card, dump_card, load_card
 from .effort.rate_card import RateCard
 from .sources import SourceDescriptor, SourceType
@@ -908,9 +909,11 @@ def export_schema(ctx: click.Context, out_dir: Path | None, modules: tuple[str, 
                    "server. Requires the [web] extras: pip install -e .[web].")
 @click.option("--runs-dir", "runs_dir",
               type=click.Path(file_okay=False, path_type=Path),
-              default=Path("runs"),
+              default=None,
               help="Directory used as the run repository when --with-api is set. "
-                   "Each run gets its own subdirectory.")
+                   "Defaults to $SMA_RUNS_DIR, then ./runs if it exists, then the "
+                   "OS per-user data dir (e.g. ~/.local/share/usma/runs on Linux, "
+                   "%LOCALAPPDATA%/USMA/runs on Windows). Each run gets its own subdirectory.")
 @click.option("--env-file", "env_file",
               type=click.Path(dir_okay=False, path_type=Path),
               default=Path(".env"),
@@ -930,7 +933,7 @@ def serve(
     host: str,
     no_browser: bool,
     with_api: bool,
-    runs_dir: Path,
+    runs_dir: Path | None,
     env_file: Path,
     static_dir: Path | None,
     ack_no_auth: bool,
@@ -993,12 +996,15 @@ def _serve_with_api(
     host: str,
     port: int,
     no_browser: bool,
-    runs_dir: Path,
+    runs_dir: Path | None,
     env_file: Path,
     static_dir: Path | None,
     ack_no_auth: bool,
 ) -> None:
     """Boot the FastAPI control plane via uvicorn."""
+    if runs_dir is None:
+        runs_dir = default_runs_dir()
+        runs_dir.mkdir(parents=True, exist_ok=True)
     if host not in ("127.0.0.1", "localhost", "::1") and not ack_no_auth:
         raise click.UsageError(
             f"--host {host} is not loopback and --with-api has no authentication. "

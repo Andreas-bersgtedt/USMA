@@ -69,6 +69,7 @@ self-contained.
 - [21a. Databricks on AWS *(alpha)*](21a-databricks-aws.md)
 - [22. Google BigQuery sources](22-bigquery.md)
 - [23. Snowflake sources](23-snowflake.md)
+- [Glossary — acronyms & abbreviations](glossary.md)
 - [99. Adding a new source](99-adding-a-source.md)
 
 ## Conventions used in this guide

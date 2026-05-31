@@ -6,6 +6,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.3.2] - 2026-05-31
+
+### Fixed
+- **SPA: enable the Delete button for stalled `running` runs.** The
+  RunsHistory row Delete button was disabled for any run with status
+  `queued`/`running`, which made the 5.3.1 backend fix unreachable from
+  the UI — crashed runs stayed un-deletable. The button is now always
+  active and the backend distinguishes genuinely in-flight runs (409)
+  from stale ones (deleted in place). Tooltip updated to explain the
+  new behaviour. Requires rebuilding `web/dist` (already done in this
+  release).
+
+## [5.3.1] - 2026-05-31
+
+### Fixed
+- **Crashed runs are now deletable from RunsHistory.** When a run was
+  killed before its status could be written (server restart, OOM, worker
+  process crash), its `run.json` stayed at `status: "running"` forever
+  and `DELETE /api/runs/{id}/data` refused with 409 — leaving an
+  un-removable ghost row in the UI. The endpoint now detects stale
+  runs (status `running`/`queued` with no live worker registered in the
+  in-process `JobRunner`), stamps them as `failed`, and proceeds with
+  the delete. Genuinely in-flight runs still 409 the same way.
+  Regression test in [tests/web/test_delete_stale_run.py](tests/web/test_delete_stale_run.py).
+
+## [5.3.0] - 2026-05-31
+
+### Added
+- **Cross-platform (Windows / Linux / macOS) support.** New `usma.platform`
+  helper module centralises OS-aware decisions so the codebase runs natively
+  on Ubuntu Desktop, other Linux distros, and macOS in addition to Windows.
+  - `cache_dir()`, `config_dir()`, `data_dir()` follow the **XDG Base
+    Directory spec** on Linux/macOS (honouring `$XDG_CACHE_HOME`,
+    `$XDG_CONFIG_HOME`, `$XDG_DATA_HOME`) and the Known Folders convention
+    (`%LOCALAPPDATA%`, `%APPDATA%`) on Windows.
+  - `default_odbc_driver()` prefers `ODBC Driver 18 for SQL Server` but
+    auto-falls back to driver 17 when 18 isn’t installed (covers older
+    Ubuntu LTS releases).
+  - `odbc_install_hint()` returns OS-appropriate install commands
+    (apt-get on Linux, brew on macOS, MSI link on Windows) and is surfaced
+    by `sma doctor` when no driver is detected.
+  - `default_runs_dir()` resolves `$SMA_RUNS_DIR` → `./runs` (if present)
+    → OS per-user data dir, used by `sma serve --with-api`.
+- **`quickstart.sh`** — Bash bootstrapper mirroring `quickstart.ps1` for
+  Linux and macOS. Clones the repo, creates `.venv`, installs every extra
+  (`dev,cost,web,databricks,bigquery,snowflake`), builds the SPA, runs
+  `sma doctor --offline`, and launches `sma serve --with-api`. Flags:
+  `--skip-clone`, `--branch`, `--python`, `--skip-doctor`, `--skip-web-build`,
+  `--no-serve`.
+- **`QUICKSTART.md`** §0.1 now ships copy-paste install commands for the
+  Microsoft ODBC Driver 18 on Ubuntu/Debian and macOS, and §0.2 has a new
+  **Fast path — `quickstart.sh` (Linux / macOS)** subsection.
+- **`tests/test_platform.py`** (14 new tests) covers per-OS cache / config /
+  data dir resolution, XDG overrides, runs-dir fallback chain, ODBC driver
+  18→17 fallback, and per-OS install-hint phrasing.
+
+### Changed
+- `usma.config.load_config` now defaults `SQL_ODBC_DRIVER` via
+  `platform.default_odbc_driver()` so hosts with only driver 17 work out
+  of the box.
+- `usma.modules.cost.fabric_pricing` cache path now resolves via
+  `platform.cache_dir()` instead of the hardcoded `~/.cache/usma/` POSIX
+  layout, so Windows hosts cache pricing under `%LOCALAPPDATA%\USMA\Cache\`
+  and Linux hosts honour `$XDG_CACHE_HOME`.
+- `sma serve --with-api --runs-dir` default is now lazy: empty string →
+  `$SMA_RUNS_DIR` → `./runs` (if present) → OS per-user data dir. Existing
+  invocations that pass `--runs-dir` explicitly are unaffected.
+- `sma doctor` ODBC-driver-missing failure now prints OS-specific install
+  instructions instead of the Windows-flavoured learn.microsoft.com URL.
+
 ## [5.2.1] - 2026-05-29
 
 ### Fixed

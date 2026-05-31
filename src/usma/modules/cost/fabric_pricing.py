@@ -26,13 +26,14 @@ import os
 import time
 import urllib.parse
 import urllib.request
-from pathlib import Path
 from typing import Any
+
+from ...platform import cache_dir as _usma_cache_dir
 
 log = logging.getLogger(__name__)
 
 _API = "https://prices.azure.com/api/retail/prices"
-_CACHE_PATH = Path.home() / ".cache" / "usma" / "fabric_prices.json"
+_CACHE_PATH = _usma_cache_dir() / "fabric_prices.json"
 _CACHE_TTL_SEC = 24 * 3600
 _HTTP_TIMEOUT = 5.0
 _MAX_PAGES = 3

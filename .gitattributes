@@ -1,0 +1,6 @@
+* text=auto
+
+# Shell scripts and Linux/macOS-bound files MUST be checked out with LF
+# regardless of core.autocrlf, otherwise bash refuses to run them.
+*.sh text eol=lf
+quickstart.sh text eol=lf

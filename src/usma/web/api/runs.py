@@ -99,8 +99,12 @@ def cancel_run(run_id: str, state: AppState = Depends(get_state)) -> dict[str, b
 def delete_run_data(run_id: str, state: AppState = Depends(get_state)) -> dict[str, bool]:
     """Purge a run's on-disk artefacts.
 
-    Refuses while the run is still in flight — cancel first via
-    ``DELETE /api/runs/{id}`` then call this endpoint to remove the data.
+    Refuses while the run is genuinely in flight. Runs that are still
+    marked ``queued``/``running`` but have no live worker behind them
+    (typical after a server restart kills the analyzer process before
+    it can update the status file) are treated as crashed: we stamp the
+    status as ``failed`` and remove the data so the UI never gets stuck
+    with un-deletable ghost rows.
     """
     try:
         meta = state.repo.get(run_id)
@@ -109,10 +113,19 @@ def delete_run_data(run_id: str, state: AppState = Depends(get_state)) -> dict[s
     if meta is None:
         raise HTTPException(status_code=404, detail=f"run {run_id} not found")
     if meta.status in ("queued", "running"):
-        raise HTTPException(
-            status_code=409,
-            detail=f"run {run_id} is still {meta.status}; cancel before deleting",
-        )
+        # Live job? cancel() returns True iff there's a worker registered
+        # in-process. False means the meta is stale (crashed / restarted).
+        if state.runner.cancel(run_id):
+            raise HTTPException(
+                status_code=409,
+                detail=f"run {run_id} is still {meta.status}; cancellation "
+                       "signalled — wait for it to settle then retry the delete",
+            )
+        try:
+            meta.status = "failed"
+            state.repo.update(meta)
+        except Exception:  # noqa: BLE001 - best-effort; deletion is the goal
+            pass
     deleted = state.repo.delete(run_id)
     try:
         state.estate.invalidate(run_id)

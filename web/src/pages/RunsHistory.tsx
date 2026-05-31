@@ -231,10 +231,11 @@ export default function RunsHistory(): JSX.Element {
                   </button>
                   <button
                     onClick={() => onDelete(r.id)}
-                    disabled={busyId === r.id || inFlight}
+                    disabled={busyId === r.id}
                     title={
                       inFlight
-                        ? "Cancel the run before deleting"
+                        ? "Delete this run. Crashed / stalled runs (server restart, killed worker) " +
+                          "are removed immediately; genuinely in-flight runs are rejected with a 409."
                         : "Permanently delete this run's data on disk"
                     }
                   >

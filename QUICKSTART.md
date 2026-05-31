@@ -293,10 +293,29 @@ projection, regional endpoint pinning, billing-export dataset).
 
 ### 0.1 Install host prerequisites
 
-- **Python 3.12+** — `python --version`
+- **Python 3.12+** — `python --version` (Linux: `python3.12 --version`)
 - **Microsoft ODBC Driver 18 for SQL Server** (required by `pyodbc`)
   - Windows: <https://learn.microsoft.com/sql/connect/odbc/download-odbc-driver-for-sql-server>
+  - Ubuntu / Debian (apt):
+    ```bash
+    curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+      | sudo gpg --dearmor -o /usr/share/keyrings/microsoft.gpg
+    echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/microsoft.gpg] \
+      https://packages.microsoft.com/ubuntu/$(lsb_release -rs)/prod $(lsb_release -cs) main" \
+      | sudo tee /etc/apt/sources.list.d/mssql-release.list
+    sudo apt-get update
+    sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc-dev
+    ```
+  - macOS (Homebrew):
+    ```bash
+    brew tap microsoft/mssql-release https://github.com/Microsoft/homebrew-mssql-release
+    brew update && HOMEBREW_ACCEPT_EULA=Y brew install msodbcsql18 mssql-tools18
+    ```
+  - Older Ubuntu LTS releases that only ship driver 17 are auto-detected — `sma`
+    will fall back to `ODBC Driver 17 for SQL Server` and `sma doctor` prints
+    a warn-only line so you know what was picked.
 - **Git** (to clone the repo)
+- **Node.js 18+** + **npm** (only if you want the browser UI bundled by `quickstart.sh` / `quickstart.ps1`; pass `--skip-web-build` / `-SkipWebBuild` otherwise)
 - **Azure CLI 2.50+** (`az`) — used in [§0.3](#03-create-a-service-principal--grant-access) to create the service principal
   - Windows: <https://learn.microsoft.com/cli/azure/install-azure-cli-windows>
   - macOS / Linux: <https://learn.microsoft.com/cli/azure/install-azure-cli>
@@ -339,6 +358,37 @@ Invoke-WebRequest -Uri $url -OutFile 'quickstart.ps1'
 Key switches: `-SkipClone`, `-Branch <name>`, `-PythonExe py`,
 `-SkipDoctor`, `-SkipWebBuild`, `-NoServe`. See the script header for the
 full parameter list.
+
+#### Fast path — `quickstart.sh` (Linux / macOS)
+
+The repo also ships a [Bash bootstrapper](quickstart.sh) that performs the
+same end-to-end sequence on Ubuntu, other Linux distros, and macOS. It
+installs **all** optional extras (`dev,cost,web,databricks,bigquery,snowflake`),
+builds the SPA bundle, runs `sma doctor --offline`, and launches
+`sma serve --with-api --static-dir web/dist`.
+
+```bash
+# Run directly from the cloned repo
+chmod +x quickstart.sh
+./quickstart.sh                           # public fork, main branch, full install + serve
+./quickstart.sh --repo private            # private fork
+./quickstart.sh --skip-web-build --no-serve  # CLI-only host
+./quickstart.sh --branch feature/foo --skip-clone  # already cloned, just install
+
+# Or download the bootstrapper and let it clone for you:
+curl -fsSL https://raw.githubusercontent.com/Andreas-bersgtedt/USMA/main/quickstart.sh -o quickstart.sh
+chmod +x quickstart.sh
+./quickstart.sh
+```
+
+Key flags: `--skip-clone`, `--branch NAME`, `--python EXE`, `--skip-doctor`,
+`--skip-web-build`, `--no-serve`. Run `./quickstart.sh --help` for the
+full list.
+
+The Linux/macOS paths honour the **XDG Base Directory spec**:
+`$XDG_CACHE_HOME/usma` (default `~/.cache/usma`) for cached pricing data,
+`$XDG_DATA_HOME/usma` (default `~/.local/share/usma`) for the per-user run
+repository when `./runs` is absent. Set `SMA_RUNS_DIR` to override.
 
 After the bootstrapper finishes, jump to [§0.3](#03-create-a-service-principal--grant-access)
 for service-principal setup, then [§0.4](#04-configure-env) to fill in `.env`.

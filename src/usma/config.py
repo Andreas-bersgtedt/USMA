@@ -7,6 +7,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from .platform import default_odbc_driver
 from .sources import SourceDescriptor, SourceType
 
 
@@ -185,7 +186,7 @@ def load_config(env_file: str | os.PathLike[str] | None = None) -> AppConfig:
             gcp_project_id=os.getenv("SMA_GCP_PROJECT_ID") or None,
         )
     sql = SqlConfig(
-        odbc_driver=os.getenv("SQL_ODBC_DRIVER", "ODBC Driver 18 for SQL Server"),
+        odbc_driver=os.getenv("SQL_ODBC_DRIVER") or default_odbc_driver(),
         login_timeout=int(os.getenv("SQL_LOGIN_TIMEOUT", "30")),
         query_timeout=int(os.getenv("SQL_QUERY_TIMEOUT", "120")),
     )

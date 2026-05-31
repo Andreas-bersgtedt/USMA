@@ -87,6 +87,8 @@ def _check_packages() -> list[CheckResult]:
 
 
 def _check_odbc_driver() -> CheckResult:
+    from .platform import default_odbc_driver, odbc_install_hint
+
     try:
         import pyodbc  # type: ignore
     except ImportError as exc:
@@ -96,11 +98,9 @@ def _check_odbc_driver() -> CheckResult:
         return CheckResult(
             "ODBC driver",
             "fail",
-            "No 'ODBC Driver xx for SQL Server' found. Install Microsoft ODBC Driver 18 "
-            "(https://learn.microsoft.com/sql/connect/odbc/download-odbc-driver-for-sql-server). "
-            "This is the IM002 'Data source name not found' error from pyodbc.",
+            "No 'ODBC Driver xx for SQL Server' found.\n" + odbc_install_hint(),
         )
-    configured = os.getenv("SQL_ODBC_DRIVER", "ODBC Driver 18 for SQL Server")
+    configured = os.getenv("SQL_ODBC_DRIVER") or default_odbc_driver()
     if not any(d.lower() == configured.lower() for d in drivers):
         return CheckResult(
             "ODBC driver",

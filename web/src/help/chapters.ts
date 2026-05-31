@@ -36,6 +36,7 @@ import databricksAws from "../../../docs/user-guide/21a-databricks-aws.md?raw";
 import bigquery from "../../../docs/user-guide/22-bigquery.md?raw";
 import snowflake from "../../../docs/user-guide/23-snowflake.md?raw";
 import addingASource from "../../../docs/user-guide/99-adding-a-source.md?raw";
+import glossary from "../../../docs/user-guide/glossary.md?raw";
 
 export type ChapterSection =
   | "Orientation"
@@ -232,6 +233,13 @@ export const CHAPTERS: Chapter[] = [
     short: "Snowflake",
     section: "Sources",
     body: snowflake,
+  },
+  {
+    slug: "glossary",
+    title: "Glossary — acronyms & abbreviations",
+    short: "Glossary",
+    section: "Reference",
+    body: glossary,
   },
   {
     slug: "99-adding-a-source",
