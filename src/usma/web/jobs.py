@@ -43,6 +43,24 @@ def _module_dispatch() -> dict[str, Callable[[AppConfig, ProgressReporter], tupl
     return dict(MODULE_REGISTRY)
 
 
+def _non_azure_subscription_label(scope: ScopeRef | None) -> str | None:
+    """Return a meaningful 'subscription'-column value for a non-Azure scope.
+
+    Databricks-on-AWS/GCP carries the Databricks Account ID in
+    ``extras['account_id']`` (Account-API discovery mode). Surfacing it
+    as the run's ``subscription_id`` lets the Estate Overview group
+    multi-workspace AWS Databricks estates under their owning account
+    instead of the empty ``—`` bucket.
+    """
+    if scope is None:
+        return None
+    extras = scope.extras or {}
+    acct = extras.get("account_id")
+    if isinstance(acct, str) and acct.strip():
+        return acct.strip()
+    return None
+
+
 def _scope_is_azure(scope: ScopeRef | None) -> bool:
     """True when the scope's primary source lives in Azure.
 
@@ -118,12 +136,18 @@ def migrate_run_attribution(
         # scope's own ``display_name`` for the workspace name so the
         # Estate Overview shows something meaningful (e.g. GCP project
         # id) rather than the unrelated Synapse workspace name from
-        # ``.env``.
+        # ``.env``. Databricks-on-AWS/GCP carries the Databricks Account
+        # ID in extras — use it as the subscription label so multi-
+        # workspace estates group under their owning account.
         changed = False
-        for field in ("tenant_id", "subscription_id", "resource_group"):
+        new_sub = _non_azure_subscription_label(scope)
+        for field in ("tenant_id", "resource_group"):
             if meta.get(field) is not None:
                 meta[field] = None
                 changed = True
+        if meta.get("subscription_id") != new_sub:
+            meta["subscription_id"] = new_sub
+            changed = True
         new_ws = scope.display_name or None
         if meta.get("workspace_name") != new_ws:
             meta["workspace_name"] = new_ws
@@ -445,7 +469,9 @@ class JobRunner:
                 modules=[ModuleStatus(name=m, state="queued") for m in modules],
                 tenant_id=cfg.azure.tenant_id if scope_is_azure else None,
                 subscription_id=(
-                    cfg.azure.subscription_id if scope_is_azure else None
+                    cfg.azure.subscription_id
+                    if scope_is_azure
+                    else _non_azure_subscription_label(primary_scope)
                 ),
                 resource_group=(
                     cfg.azure.resource_group if scope_is_azure else None
