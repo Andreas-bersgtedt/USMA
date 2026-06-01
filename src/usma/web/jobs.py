@@ -426,7 +426,16 @@ class JobRunner:
             # Azure values happen to be sitting in ``.env`` for the
             # service-principal credentials.
             primary_scope = effective_scopes[0] if effective_scopes else None
-            scope_is_azure = _scope_is_azure(primary_scope)
+            # Legacy single-scope path (no scopes attached) is Azure by
+            # construction — the analyzer was built around a single
+            # Synapse workspace pulled from ``.env``. Without this
+            # fallback all identity fields would be ``None`` and runs
+            # for different workspaces would collide on carry-forward.
+            scope_is_azure = (
+                _scope_is_azure(primary_scope)
+                if primary_scope is not None
+                else True
+            )
             meta = RunMeta(
                 id=self.repo.new_id(),
                 label=label,
