@@ -95,6 +95,12 @@ A symptom → cause → fix matrix for the most common problems.
 | ----- | --- |
 | The linked service uses a managed-identity / shared-access-signature URL the parser can't extract a host from. | Set `SMA_STORAGE_INCLUDE_ALL=1` in `.env` to fall back to the legacy subscription-wide scan. File an issue with the linked-service definition redacted so the parser can be improved. |
 
+### "Estate overview shows my BigQuery / Snowflake-on-AWS / Databricks-on-AWS scope under an Azure tenant"
+
+| Cause | Fix |
+| ----- | --- |
+| The run was created before the cloud-aware identity fix and inherited `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` from `.env`. | Open the **Configuration** tab and click **Migrate N run(s)** on the *Fix non-Azure run attribution* panel (only appears when something needs fixing). CLI equivalent: `sma migrate-run-attribution --dry-run` to preview, then without `--dry-run` to apply. See [12. Configuration → Fix non-Azure run attribution](12-configuration.md#fix-non-azure-run-attribution). |
+
 ---
 
 ## Run / API issues

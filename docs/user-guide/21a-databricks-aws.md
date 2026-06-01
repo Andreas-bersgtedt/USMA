@@ -122,3 +122,10 @@ cost figures are unavailable so the assessment report stays honest.
   [`USMA_planning_Manifest.md`](../../USMA_planning_Manifest.md)).
 * GCP Databricks reuses the same code path (`platform="gcp"` is
   reserved) but has no provider implementation in 0.7.
+* **Legacy run attribution.** Runs created before the cloud-aware
+  identity fix inherited `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID`
+  from `.env`. If your Estate overview shows an AWS Databricks
+  workspace grouped under an Azure tenant, run
+  `sma migrate-run-attribution` (or use the **Fix non-Azure run
+  attribution** panel on the [Configuration](12-configuration.md#fix-non-azure-run-attribution)
+  page). New runs are attributed correctly automatically.

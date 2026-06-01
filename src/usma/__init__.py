@@ -1,3 +1,3 @@
 """Unified Solution Migration Analyzer."""
 
-__version__ = "5.3.2"
+__version__ = "5.3.3"

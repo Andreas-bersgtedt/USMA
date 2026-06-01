@@ -6,6 +6,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.3.3] - 2026-06-01
+
+### Fixed
+- **Run attribution: non-Azure scopes no longer inherit Azure tenant /
+  subscription.** `JobRunner.start()` unconditionally stamped
+  `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` / `resource_group` /
+  `workspace_name` onto every `run.json`, so BigQuery,
+  Snowflake-on-AWS, and Databricks-on-AWS/GCP runs were grouped under
+  the unrelated Azure tenant on the Estate Overview. New runs now
+  leave those fields `null` for non-Azure scopes and use the scope's
+  own `display_name` as the workspace name.
+
+### Added
+- **`sma migrate-run-attribution` CLI** (`--dry-run`, `--runs-dir`) and
+  matching `GET` / `POST /api/migrations/run-attribution` endpoints
+  that rewrite existing `run.json` files in place.
+- **Configuration tab: "Fix non-Azure run attribution" panel** that
+  self-detects pending migrations and exposes a single-click migrate
+  button (only renders when something needs fixing).
+- **Docs:** new section in [docs/user-guide/12-configuration.md](docs/user-guide/12-configuration.md);
+  troubleshooting entry in [docs/user-guide/13-troubleshooting.md](docs/user-guide/13-troubleshooting.md);
+  legacy-runs callout in [docs/user-guide/16-overview.md](docs/user-guide/16-overview.md);
+  glossary entries for *Run attribution* and *Non-Azure scope*; source
+  cross-references in the BigQuery / Snowflake / Databricks-on-AWS
+  chapters; CLI row in [QUICKSTART.md](QUICKSTART.md).
+
 ## [5.3.2] - 2026-05-31
 
 ### Fixed
@@ -197,8 +223,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DATABRICKS_CLIENT_ID`, `DATABRICKS_CLIENT_SECRET`,
   `DATABRICKS_ACCOUNT_ID`) and forward them through to the
   analyzer at run time. See
-  [ADR-0005](docs/adr/0005-databricks-on-aws.md) and the
-  [AWS Databricks user guide](docs/user-guide/aws-databricks.md).
+  [ADR-0005](docs/adr/0005-multi-cloud-databricks.md) and the
+  [AWS Databricks user guide](docs/user-guide/21a-databricks-aws.md).
 - **SPA: per-cloud Configuration form for Databricks** with an
   Azure / AWS sub-radio, OAuth-driven workspace discovery for AWS,
   and an alpha badge on the platform selector.

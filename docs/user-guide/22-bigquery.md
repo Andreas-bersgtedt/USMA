@@ -292,6 +292,13 @@ do not affect other sections.
 * **No BigLake / BigQuery Omni / BigQuery ML model deep-dive.**
   `ML_*` job types are surfaced in the job-bucket recs but not
   classified for Fabric compatibility yet.
+* **Legacy run attribution.** Runs created before the cloud-aware
+  identity fix inherited `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID`
+  from `.env`, even for BigQuery scopes. If your Estate overview
+  shows a BigQuery project under an Azure tenant, run
+  `sma migrate-run-attribution` (or use the **Fix non-Azure run
+  attribution** panel on the [Configuration](12-configuration.md#fix-non-azure-run-attribution)
+  page). New runs are attributed correctly automatically.
 
 ## Roadmap
 

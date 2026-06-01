@@ -806,6 +806,43 @@ export async function apiResetEffortCard(): Promise<{ saved_to: string; source: 
 }
 
 // ---------------------------------------------------------------------------
+// Run-attribution migration — rewrite legacy run.json files whose primary
+// scope is non-Azure (BigQuery / Snowflake-on-AWS / Databricks-on-AWS|GCP)
+// but inherited AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID from .env.
+// ---------------------------------------------------------------------------
+
+export interface MigrationStatus {
+  needed: boolean;
+  pending: string[];
+  skipped_count: number;
+  errors: string[];
+}
+
+export interface MigrationResult {
+  updated: string[];
+  skipped_count: number;
+  errors: string[];
+}
+
+export async function apiGetRunAttributionStatus(): Promise<MigrationStatus> {
+  const r = await fetch("/api/migrations/run-attribution");
+  if (!r.ok) throw new Error(`/api/migrations/run-attribution: HTTP ${r.status}`);
+  return r.json() as Promise<MigrationStatus>;
+}
+
+export async function apiRunAttributionMigrate(): Promise<MigrationResult> {
+  const r = await fetch("/api/migrations/run-attribution", {
+    method: "POST",
+    headers: API_HEADERS,
+  });
+  if (!r.ok) {
+    const detail = await r.text();
+    throw new Error(`POST /api/migrations/run-attribution ${r.status}: ${detail}`);
+  }
+  return r.json() as Promise<MigrationResult>;
+}
+
+// ---------------------------------------------------------------------------
 // Runs archive (v2.11) — backup / restore all run data as a zip.
 // ---------------------------------------------------------------------------
 

@@ -61,7 +61,7 @@ override the auto-detection from `CURRENT_REGION()`.
 
 Snowflake does **not** use the Azure service principal. The analyzer
 authenticates via Snowflake's built-in **OAuth security integration**
-(refresh-token grant) — see [ADR-0007](../adr/ADR-0007-snowflake-auth.md)
+(refresh-token grant) — see [ADR-0007](../adr/0007-snowflake-auth.md)
 for why we chose this over key-pair JWT. The four AAD fields
 (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`,
 `AZURE_SUBSCRIPTION_ID`) are ignored when `SMA_SOURCE_TYPE=snowflake`.
@@ -355,6 +355,14 @@ so you can't accidentally schedule a wave that can never finish.
 * **Cross-region replication** is reported as raw storage cost but
   the workloads matrix does not yet model the cross-region pipeline
   shape on the Fabric side.
+* **Legacy run attribution (Snowflake-on-AWS).** Runs created before
+  the cloud-aware identity fix inherited `AZURE_TENANT_ID` /
+  `AZURE_SUBSCRIPTION_ID` from `.env`. Snowflake-on-Azure accounts
+  are unaffected (they really do live in an Azure tenant). For
+  Snowflake-on-AWS, run `sma migrate-run-attribution` (or use the
+  **Fix non-Azure run attribution** panel on the
+  [Configuration](12-configuration.md#fix-non-azure-run-attribution)
+  page). New runs are attributed correctly automatically.
 
 ## Roadmap
 

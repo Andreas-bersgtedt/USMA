@@ -538,4 +538,5 @@ Cumulative ship log for changes that aren't substantial enough for their own pha
 | 5.3.0 | `1859812` + `ed9522b` | Cross-platform support (see Phase 5.3 above) |
 | 5.3.1 | `e99ab27` | Fix: `DELETE /api/runs/{id}/data` now stamps stale `running`/`queued` runs (no live worker) as `failed` and deletes them instead of 409-ing forever. Regression test in [tests/web/test_delete_stale_run.py](tests/web/test_delete_stale_run.py). |
 | 5.3.2 | `af100ce` | Fix: RunsHistory SPA Delete button enabled for stalled `running` runs (was disabled, making the 5.3.1 backend fix unreachable). Tooltip updated; SPA rebuilt. |
+| 5.3.3 | `49d0587` + `905be35` + `04cfe8f` | Fix: non-Azure scopes (BigQuery, Snowflake-on-AWS, Databricks-on-AWS/GCP) no longer inherit Azure tenant / subscription on new runs. New `sma migrate-run-attribution` CLI + `/api/migrations/run-attribution` endpoints + Configuration-tab self-hiding panel rewrite legacy `run.json` files. Full user-guide coverage. |
 

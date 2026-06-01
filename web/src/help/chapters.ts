@@ -37,6 +37,22 @@ import bigquery from "../../../docs/user-guide/22-bigquery.md?raw";
 import snowflake from "../../../docs/user-guide/23-snowflake.md?raw";
 import addingASource from "../../../docs/user-guide/99-adding-a-source.md?raw";
 import glossary from "../../../docs/user-guide/glossary.md?raw";
+import repoContributing from "../../../CONTRIBUTING.md?raw";
+import repoDependencies from "../../../DEPENDENCIES.md?raw";
+import repoManifest from "../../../USMA_planning_Manifest.md?raw";
+import repoFeasibility from "../../../feasibility_study.md?raw";
+import adr0001 from "../../../docs/adr/0001-multi-source-architecture.md?raw";
+import adr0002 from "../../../docs/adr/0002-scope-and-credentials-model.md?raw";
+import adr0003 from "../../../docs/adr/0003-manifest-v2-schema.md?raw";
+import adr0004 from "../../../docs/adr/0004-package-rename.md?raw";
+import adr0005 from "../../../docs/adr/0005-multi-cloud-databricks.md?raw";
+import adr0007 from "../../../docs/adr/0007-snowflake-auth.md?raw";
+import adr0008 from "../../../docs/adr/0008-snowflake-multi-cloud.md?raw";
+import adrReadme from "../../../docs/adr/README.md?raw";
+import repoCodeOfConduct from "../../../CODE_OF_CONDUCT.md?raw";
+import archOverview from "../../../docs/architecture/overview.md?raw";
+import archSources from "../../../docs/architecture/sources.md?raw";
+import archModules from "../../../docs/architecture/modules.md?raw";
 
 export type ChapterSection =
   | "Orientation"
@@ -280,6 +296,134 @@ export const CHAPTERS: Chapter[] = [
     short: "Security policy",
     section: "Reference",
     body: repoSecurity,
+    hidden: true,
+  },
+  {
+    slug: "CONTRIBUTING",
+    title: "Contributing",
+    short: "Contributing",
+    section: "Reference",
+    body: repoContributing,
+    hidden: true,
+  },
+  {
+    slug: "DEPENDENCIES",
+    title: "Dependencies",
+    short: "Dependencies",
+    section: "Reference",
+    body: repoDependencies,
+    hidden: true,
+  },
+  {
+    slug: "USMA_planning_Manifest",
+    title: "Planning manifest",
+    short: "Planning manifest",
+    section: "Reference",
+    body: repoManifest,
+    hidden: true,
+  },
+  {
+    slug: "feasibility_study",
+    title: "Feasibility study",
+    short: "Feasibility study",
+    section: "Reference",
+    body: repoFeasibility,
+    hidden: true,
+  },
+  {
+    slug: "0001-multi-source-architecture",
+    title: "ADR-0001 — Multi-source architecture",
+    short: "ADR-0001",
+    section: "Reference",
+    body: adr0001,
+    hidden: true,
+  },
+  {
+    slug: "0002-scope-and-credentials-model",
+    title: "ADR-0002 — Scope & credentials model",
+    short: "ADR-0002",
+    section: "Reference",
+    body: adr0002,
+    hidden: true,
+  },
+  {
+    slug: "0003-manifest-v2-schema",
+    title: "ADR-0003 — Manifest v2 schema",
+    short: "ADR-0003",
+    section: "Reference",
+    body: adr0003,
+    hidden: true,
+  },
+  {
+    slug: "0004-package-rename",
+    title: "ADR-0004 — Package rename",
+    short: "ADR-0004",
+    section: "Reference",
+    body: adr0004,
+    hidden: true,
+  },
+  {
+    slug: "0005-multi-cloud-databricks",
+    title: "ADR-0005 — Multi-cloud Databricks",
+    short: "ADR-0005",
+    section: "Reference",
+    body: adr0005,
+    hidden: true,
+  },
+  {
+    slug: "0007-snowflake-auth",
+    title: "ADR-0007 — Snowflake auth",
+    short: "ADR-0007",
+    section: "Reference",
+    body: adr0007,
+    hidden: true,
+  },
+  {
+    slug: "0008-snowflake-multi-cloud",
+    title: "ADR-0008 — Snowflake multi-cloud",
+    short: "ADR-0008",
+    section: "Reference",
+    body: adr0008,
+    hidden: true,
+  },
+  {
+    slug: "adr-index",
+    title: "ADR index",
+    short: "ADR index",
+    section: "Reference",
+    body: adrReadme,
+    hidden: true,
+  },
+  {
+    slug: "CODE_OF_CONDUCT",
+    title: "Code of Conduct",
+    short: "Code of Conduct",
+    section: "Reference",
+    body: repoCodeOfConduct,
+    hidden: true,
+  },
+  {
+    slug: "overview",
+    title: "Architecture — overview",
+    short: "Architecture overview",
+    section: "Reference",
+    body: archOverview,
+    hidden: true,
+  },
+  {
+    slug: "sources",
+    title: "Architecture — sources",
+    short: "Architecture sources",
+    section: "Reference",
+    body: archSources,
+    hidden: true,
+  },
+  {
+    slug: "modules",
+    title: "Architecture — modules",
+    short: "Architecture modules",
+    section: "Reference",
+    body: archModules,
     hidden: true,
   },
 ];

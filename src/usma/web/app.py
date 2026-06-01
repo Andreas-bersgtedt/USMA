@@ -24,6 +24,7 @@ from .api import events as events_api
 from .api import gcp_auth as gcp_auth_api
 from .api import snowflake_auth as snowflake_auth_api
 from .api import healthz as healthz_api
+from .api import migrations as migrations_api
 from .api import modules as modules_api
 from .api import runs as runs_api
 from .api import runs_archive as runs_archive_api
@@ -104,6 +105,7 @@ def create_app(
     app.include_router(modules_api.router, prefix="/api/runs")
     app.include_router(diff_api.router, prefix="/api/runs")
     app.include_router(estate_api.router, prefix="/api/estate")
+    app.include_router(migrations_api.router, prefix="/api/migrations")
     # Slice 5-I — browser-based GCP ADC sign-in (POST /api/auth/gcp/login
     # + GET /api/auth/gcp/status). Drives `InstalledAppFlow` on a
     # background thread so customers can produce ADC user-credentials

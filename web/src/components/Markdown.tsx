@@ -3,6 +3,7 @@ import remarkGfm from "remark-gfm";
 import rehypeSlug from "rehype-slug";
 import { Link } from "react-router-dom";
 import { useEffect, useId, useRef, useState } from "react";
+import { CHAPTERS_BY_SLUG } from "../help/chapters";
 
 interface Props {
   source: string;
@@ -95,14 +96,18 @@ function rewriteHref(href: string): { internal: boolean; href: string } {
     const anchor = repoMatch[2] || "";
     return { internal: true, href: `/help/${slug}${anchor}` };
   }
-  // Strip a leading ./ for normalisation.
-  const target = href.replace(/^\.\//, "");
-  // Match `<slug>.md` or `<slug>.md#anchor`.
-  const m = target.match(/^([A-Za-z0-9_-]+)\.md(#.*)?$/);
-  if (m) {
-    const slug = m[1];
-    const anchor = m[2] || "";
-    return { internal: true, href: `/help/${slug}${anchor}` };
+  // Generic `<...path>/<basename>.md(#anchor)?` — strip path and look up
+  // basename against the bundled chapter slugs. This handles
+  // `docs/user-guide/05-code-objects.md`, `../adr/0007-snowflake-auth.md`,
+  // bare `12-configuration.md`, etc., regardless of how many `../` segments
+  // the link uses.
+  const generic = href.match(/^(?:[^?#]*\/)?([A-Za-z0-9_.\-]+)\.md(#.*)?$/);
+  if (generic) {
+    const stem = generic[1];
+    const anchor = generic[2] || "";
+    if (CHAPTERS_BY_SLUG[stem]) {
+      return { internal: true, href: `/help/${stem}${anchor}` };
+    }
   }
   // Anything else escapes out — let it open externally.
   return { internal: false, href };

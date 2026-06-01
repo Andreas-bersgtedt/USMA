@@ -241,3 +241,51 @@ Conflict modes:
 
 A run that is currently `queued` or `running` cannot be overwritten —
 cancel it first via the runs history.
+
+## Fix non-Azure run attribution
+
+A small panel labelled **Fix non-Azure run attribution** appears between
+the effort-card editor and Backup & restore — but **only** when at
+least one run on disk needs to be fixed. Most users will never see it.
+
+### What problem it solves
+
+Runs created before this fix unconditionally stamped the
+`AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID` from `.env` onto every
+`run.json`, even when the run's primary scope was BigQuery,
+Snowflake-on-AWS, or Databricks-on-AWS/GCP. The
+[Estate overview](16-overview.md) groups scopes by
+`Cloud → Tenant · Subscription`, so non-Azure scopes ended up showing
+the unrelated Azure tenant / subscription that happens to drive the
+service-principal credentials.
+
+The fix in newer runs leaves those fields blank for non-Azure scopes
+and uses the scope's own display name (e.g. the GCP project id) as the
+workspace name. The migration applies the same rewrite to existing
+runs.
+
+### When to use it
+
+Use it after upgrading if the Estate overview shows any non-Azure
+scope grouped under your Azure tenant or subscription. The panel
+self-detects this — if nothing needs fixing it stays hidden.
+
+### What it does
+
+Clicking the **Migrate N run(s)** button calls
+`POST /api/migrations/run-attribution`, which:
+
+- walks every `run.json` under `runs_dir`,
+- skips Azure-native scopes (Synapse, ADF, Databricks-on-Azure,
+  Snowflake-on-Azure),
+- for the rest, sets `tenant_id` / `subscription_id` /
+  `resource_group` to `null` and updates `workspace_name` to the
+  scope's own display name,
+- writes atomically (no half-written files), and
+- never touches the analyzer artefacts (`fabric_mapping.json`,
+  `cost.json`, etc.).
+
+The CLI equivalent is `sma migrate-run-attribution` (`--dry-run`
+reports what would change without writing).
+
+See also: [glossary](glossary.md) (entries: *Run attribution*, *Non-Azure scope*).

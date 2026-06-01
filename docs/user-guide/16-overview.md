@@ -53,10 +53,19 @@ least one successful run.
 
 ### Workspaces table
 
-Grouped by **Tenant · Subscription**. Each row is one workspace and
-shows that workspace's *most recent successful run* (we ignore the
+Grouped by **Cloud → Tenant · Subscription**. Each row is one workspace
+and shows that workspace's *most recent successful run* (we ignore the
 last failure so a transient outage doesn't wipe the headline numbers,
 while still counting it under "Runs").
+
+> **Legacy runs note.** Runs created before the cloud-aware identity
+> fix inherited `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID` from
+> `.env`, even when the primary scope was BigQuery,
+> Snowflake-on-AWS, or Databricks-on-AWS/GCP. If you see a non-Azure
+> scope grouped under your Azure tenant, run **Fix non-Azure run
+> attribution** on the [Configuration](12-configuration.md#fix-non-azure-run-attribution)
+> page (or `sma migrate-run-attribution` from the CLI). New runs are
+> attributed correctly automatically.
 
 Notable columns:
 

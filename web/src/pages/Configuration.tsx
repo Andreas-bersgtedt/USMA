@@ -11,10 +11,12 @@ import {
   apiGcpAuthStatus,
   apiGetConfig,
   apiGetEffortCard,
+  apiGetRunAttributionStatus,
   apiImportRunsArchive,
   apiPutConfig,
   apiPutEffortCard,
   apiResetEffortCard,
+  apiRunAttributionMigrate,
   apiSnowflakeAuthLogin,
   apiSnowflakeAuthStatus,
   apiValidateConfig,
@@ -1252,6 +1254,7 @@ export default function Configuration(): JSX.Element {
       )}
 
       <EffortCardEditor />
+      <RunAttributionMigration />
       <RunsBackupRestore />
     </section>
   );
@@ -1563,6 +1566,116 @@ function EffortCardEditor(): JSX.Element {
         )}
       </div>
     </details>
+  );
+}
+
+
+/**
+ * Run-attribution migration panel.
+ *
+ * Only renders an actionable button when at least one on-disk
+ * `run.json` was created before the cloud-aware identity stamping
+ * (i.e. inherited AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID from `.env`
+ * even though its primary scope is BigQuery / Snowflake-on-AWS /
+ * Databricks-on-AWS|GCP). Polls `GET /api/migrations/run-attribution`
+ * on mount so the panel stays hidden when nothing needs fixing.
+ */
+function RunAttributionMigration(): JSX.Element | null {
+  const [status, setStatus] = useState<{
+    needed: boolean;
+    pending: string[];
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = async () => {
+    try {
+      const r = await apiGetRunAttributionStatus();
+      setStatus({ needed: r.needed, pending: r.pending });
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  const onMigrate = async () => {
+    setBusy(true);
+    setError(null);
+    setMsg(null);
+    try {
+      const r = await apiRunAttributionMigrate();
+      setMsg(
+        r.updated.length === 0
+          ? "Nothing to migrate."
+          : `Migrated ${r.updated.length} run${r.updated.length === 1 ? "" : "s"}.`,
+      );
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (status === null) return null;
+  if (!status.needed && msg === null) return null;
+
+  return (
+    <div className="card" style={{ marginTop: "1rem" }}>
+      <div style={{ fontWeight: 600 }}>
+        Fix non-Azure run attribution{" "}
+        {status.needed && (
+          <span className="pill warn" style={{ marginLeft: 6 }}>
+            {status.pending.length} run{status.pending.length === 1 ? "" : "s"}
+          </span>
+        )}
+      </div>
+      <p className="small muted" style={{ marginTop: "0.5rem" }}>
+        Older runs whose primary scope is BigQuery, Snowflake-on-AWS, or
+        Databricks-on-AWS/GCP inherited the Azure tenant and subscription
+        from <code>.env</code>. This rewrites their <code>run.json</code>{" "}
+        so the Estate Overview groups them under the correct hyperscaler.
+        Run artefacts themselves are not touched.
+      </p>
+      <div className="actions" style={{ gap: 8, flexWrap: "wrap" }}>
+        <button onClick={onMigrate} disabled={busy || !status.needed}>
+          {busy
+            ? "Migrating…"
+            : status.needed
+              ? `Migrate ${status.pending.length} run${status.pending.length === 1 ? "" : "s"}`
+              : "Up to date"}
+        </button>
+      </div>
+      {msg && (
+        <p className="small" style={{ marginTop: "0.5rem" }}>
+          {msg}
+        </p>
+      )}
+      {error && (
+        <p
+          className="small"
+          style={{ marginTop: "0.5rem", color: "var(--err, #c33)" }}
+        >
+          {error}
+        </p>
+      )}
+      {status.needed && status.pending.length > 0 && (
+        <details className="small" style={{ marginTop: "0.5rem" }}>
+          <summary>Affected runs ({status.pending.length})</summary>
+          <ul>
+            {status.pending.map((id) => (
+              <li key={id}>
+                <code>{id}</code>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
   );
 }
 

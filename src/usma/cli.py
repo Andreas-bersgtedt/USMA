@@ -1054,6 +1054,41 @@ def _serve_with_api(
     uvicorn.run(app, host=host, port=port, log_config=None)
 
 
+@cli.command("migrate-run-attribution")
+@click.option(
+    "--runs-dir", "runs_dir",
+    type=click.Path(file_okay=False, path_type=Path), default=None,
+    help="Runs directory to migrate. Defaults to the same auto-discovery used by `sma serve`.",
+)
+@click.option(
+    "--dry-run", is_flag=True, default=False,
+    help="Report what would change without writing.",
+)
+def migrate_run_attribution_cmd(runs_dir: Path | None, dry_run: bool) -> None:
+    """Strip Azure identity from existing run.json files for non-Azure scopes.
+
+    Rewrites pre-fix runs whose primary scope is BigQuery, Snowflake-on-AWS,
+    or Databricks-on-AWS/GCP so the Estate Overview no longer mis-attributes
+    them to the Azure tenant/subscription from .env.
+    """
+    from .web.jobs import migrate_run_attribution
+
+    if runs_dir is None:
+        runs_dir = default_runs_dir()
+    runs_dir = runs_dir.resolve()
+    console.print(f"Scanning [cyan]{runs_dir}[/cyan]"
+                  + (" [yellow](dry-run)[/yellow]" if dry_run else ""))
+    result = migrate_run_attribution(runs_dir, dry_run=dry_run)
+    console.print(f"  Updated: {len(result['updated'])}")
+    console.print(f"  Skipped: {len(result['skipped'])}")
+    if result["errors"]:
+        console.print(f"  [red]Errors:[/red]  {len(result['errors'])}")
+        for line in result["errors"]:
+            console.print(f"    {line}")
+    for rid in result["updated"]:
+        console.print(f"  [green]✓[/green] {rid}")
+
+
 def main() -> None:
     try:
         cli(obj={})

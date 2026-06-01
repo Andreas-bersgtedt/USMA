@@ -45,6 +45,7 @@ A **module-based** walkthrough of the Unified Solution Migration Analyzer (USMA)
 | 🔄 | _delta_            | —            | `sma run-delta`                | re-emits `run_manifest.json` + `run_delta.{md,html,json}` against the previous run |
 | 🔗 | _index_            | —            | `sma index`                    | (re)builds the `index.html` landing page in `SMA_OUTPUT_DIR` |
 | ⚙ | _self-check_       | —            | `sma doctor`                   | host + auth pre-flight ([doctor.py](src/usma/doctor.py)) |
+| 🛠 | _migration_        | —            | `sma migrate-run-attribution`  | rewrites legacy `run.json` files so BigQuery / Snowflake-on-AWS / Databricks-on-AWS·GCP runs no longer inherit Azure tenant / subscription IDs (`--dry-run` previews). See [docs/user-guide/12-configuration.md](docs/user-guide/12-configuration.md#fix-non-azure-run-attribution) |
 
 ---
 

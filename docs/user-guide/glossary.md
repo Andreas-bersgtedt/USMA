@@ -44,6 +44,7 @@ project** — industry-standard meanings are noted where they differ.
 | METERING_HISTORY | Snowflake table — credits per warehouse over time |
 | MPE | Managed Private Endpoints |
 | MSI | Managed Service Identity (Azure) |
+| Non-Azure scope | A scope whose primary source is BigQuery, Snowflake-on-AWS, or Databricks-on-AWS/GCP. These scopes have no Azure tenant / subscription / resource group and are grouped under `— · —` in the Estate Overview. |
 | ODBC | Open Database Connectivity — Microsoft ODBC Driver 17/18 for Synapse SQL |
 | OAuth | Authorisation protocol — Snowflake refresh-token flow, Google ADC browser sign-in |
 | PAT | Personal Access Token (Databricks) |
@@ -51,6 +52,7 @@ project** — industry-standard meanings are noted where they differ.
 | QUERY_HISTORY | Snowflake table — completed jobs (workload + cost basis) |
 | RBAC | Role-Based Access Control (Azure / Synapse / Databricks) |
 | RI | Reserved Instance (Fabric / Azure pricing) |
+| Run attribution | The `tenant_id` / `subscription_id` / `resource_group` / `workspace_name` fields persisted on each `run.json` and used by the Estate Overview to group runs by `Cloud → Tenant · Subscription`. Non-Azure scopes (BigQuery, Snowflake-on-AWS, Databricks-on-AWS/GCP) leave the Azure fields `null`; pre-5.3.3 runs may need `sma migrate-run-attribution`. |
 | SCIM | System for Cross-domain Identity Management (Databricks roles) |
 | SJD | Spark Job Definition (Synapse) |
 | SKU | Stock Keeping Unit — Fabric F-SKUs |

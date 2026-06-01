@@ -43,6 +43,105 @@ def _module_dispatch() -> dict[str, Callable[[AppConfig, ProgressReporter], tupl
     return dict(MODULE_REGISTRY)
 
 
+def _scope_is_azure(scope: ScopeRef | None) -> bool:
+    """True when the scope's primary source lives in Azure.
+
+    BigQuery is always GCP; Snowflake / Databricks carry their
+    hyperscaler in ``extras['platform']`` (``aws``/``gcp``/``azure``).
+    Synapse and ADF scopes are Azure-only by construction.
+    """
+    if scope is None:
+        return False
+    st = (scope.source_type or "").lower()
+    if st == "bigquery":
+        return False
+    if st in {"databricks", "snowflake"}:
+        plat = str((scope.extras or {}).get("platform", "")).lower()
+        # Databricks defaults to Azure when no platform hint is present
+        # (legacy single-scope path); Snowflake defaults to AWS.
+        if not plat:
+            return st == "databricks"
+        return plat == "azure"
+    # synapse_workspace, adf, sap_bw → Azure.
+    return True
+
+
+def migrate_run_attribution(
+    runs_dir: Path, *, dry_run: bool = False
+) -> dict[str, list[str]]:
+    """Strip Azure identity from existing ``run.json`` files for non-Azure scopes.
+
+    Older runs (created before the cloud-aware ``RunMeta`` stamping in
+    :meth:`JobRunner.start`) inherited ``AZURE_TENANT_ID`` /
+    ``AZURE_SUBSCRIPTION_ID`` / ``SYNAPSE_RESOURCE_GROUP`` /
+    ``SYNAPSE_WORKSPACE_NAME`` from the service-principal credentials
+    even when the run's primary scope was BigQuery, Snowflake-on-AWS,
+    or Databricks-on-AWS/GCP. This rewrites those four fields to match
+    the new convention so the Estate Overview groups them under the
+    correct hyperscaler bucket.
+
+    Returns ``{"updated": [...], "skipped": [...], "errors": [...]}``.
+    Pass ``dry_run=True`` to compute the list without touching disk.
+    """
+    runs_dir = runs_dir.resolve()
+    out: dict[str, list[str]] = {"updated": [], "skipped": [], "errors": []}
+    if not runs_dir.is_dir():
+        return out
+    for child in sorted(runs_dir.iterdir()):
+        if not child.is_dir():
+            continue
+        run_json = child / "run.json"
+        if not run_json.is_file():
+            continue
+        try:
+            meta = json.loads(run_json.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            out["errors"].append(f"{child.name}: {exc}")
+            continue
+        scopes = meta.get("scopes") or []
+        primary = scopes[0] if isinstance(scopes, list) and scopes else None
+        if not isinstance(primary, dict):
+            out["skipped"].append(child.name)
+            continue
+        scope = ScopeRef(
+            source_type=primary.get("source_type") or "synapse_workspace",
+            id=primary.get("id") or "x",
+            display_name=primary.get("display_name") or "x",
+            subscription_id=primary.get("subscription_id"),
+            resource_group=primary.get("resource_group"),
+            extras=dict(primary.get("extras") or {}),
+        )
+        if _scope_is_azure(scope):
+            out["skipped"].append(child.name)
+            continue
+        # Non-Azure scope: zero out inherited Azure identity. Prefer the
+        # scope's own ``display_name`` for the workspace name so the
+        # Estate Overview shows something meaningful (e.g. GCP project
+        # id) rather than the unrelated Synapse workspace name from
+        # ``.env``.
+        changed = False
+        for field in ("tenant_id", "subscription_id", "resource_group"):
+            if meta.get(field) is not None:
+                meta[field] = None
+                changed = True
+        new_ws = scope.display_name or None
+        if meta.get("workspace_name") != new_ws:
+            meta["workspace_name"] = new_ws
+            changed = True
+        if not changed:
+            out["skipped"].append(child.name)
+            continue
+        if not dry_run:
+            tmp = run_json.with_suffix(".json.tmp")
+            tmp.write_text(
+                json.dumps(meta, indent=2, sort_keys=False, default=str),
+                encoding="utf-8",
+            )
+            tmp.replace(run_json)
+        out["updated"].append(child.name)
+    return out
+
+
 def hash_config(cfg: AppConfig) -> str:
     """sha256 of the redacted AppConfig (secret excluded)."""
     payload = {
@@ -319,6 +418,15 @@ class JobRunner:
                     )
                 ]
 
+            # Only stamp the Azure tenant / subscription / RG / workspace
+            # identity onto the run when the primary scope actually lives
+            # in Azure. BigQuery, Snowflake-on-non-Azure, and
+            # Databricks-on-AWS/GCP scopes leave those fields null so
+            # the Estate Overview doesn't mis-attribute them to whatever
+            # Azure values happen to be sitting in ``.env`` for the
+            # service-principal credentials.
+            primary_scope = effective_scopes[0] if effective_scopes else None
+            scope_is_azure = _scope_is_azure(primary_scope)
             meta = RunMeta(
                 id=self.repo.new_id(),
                 label=label,
@@ -326,10 +434,18 @@ class JobRunner:
                 started_at=datetime.now(timezone.utc),
                 config_hash=hash_config(cfg),
                 modules=[ModuleStatus(name=m, state="queued") for m in modules],
-                tenant_id=cfg.azure.tenant_id,
-                subscription_id=cfg.azure.subscription_id,
-                resource_group=cfg.azure.resource_group,
-                workspace_name=cfg.azure.workspace_name,
+                tenant_id=cfg.azure.tenant_id if scope_is_azure else None,
+                subscription_id=(
+                    cfg.azure.subscription_id if scope_is_azure else None
+                ),
+                resource_group=(
+                    cfg.azure.resource_group if scope_is_azure else None
+                ),
+                workspace_name=(
+                    cfg.azure.workspace_name
+                    if scope_is_azure
+                    else (primary_scope.display_name if primary_scope else None)
+                ),
                 scopes=effective_scopes,
             )
             self.repo.create(meta)
