@@ -937,3 +937,43 @@ export async function apiGetRunModule<T>(runId: string, name: string): Promise<T
   return r.json() as Promise<T>;
 }
 
+
+// ---------------------------------------------------------------------------
+// Session log buffer.
+// ---------------------------------------------------------------------------
+export interface LogRecord {
+  seq: number;
+  ts: string;
+  level: string;
+  level_no: number;
+  logger: string;
+  message: string;
+  exc: string | null;
+}
+
+export interface LogsResponse {
+  records: LogRecord[];
+  capacity: number;
+  handler_level: string;
+}
+
+export async function apiGetLogs(params: { level?: string; since_seq?: number; limit?: number } = {}): Promise<LogsResponse> {
+  const q = new URLSearchParams();
+  if (params.level) q.set('level', params.level);
+  if (params.since_seq !== undefined) q.set('since_seq', String(params.since_seq));
+  if (params.limit !== undefined) q.set('limit', String(params.limit));
+  const qs = q.toString() ? '?' + q.toString() : '';
+  const r = await fetch('/api/logs' + qs);
+  if (!r.ok) throw new Error('/api/logs: HTTP ' + r.status);
+  return r.json() as Promise<LogsResponse>;
+}
+
+export async function apiClearLogs(): Promise<{ dropped: number }> {
+  const r = await fetch('/api/logs', { method: 'DELETE', headers: API_HEADERS });
+  if (!r.ok) {
+    const detail = await r.text();
+    throw new Error('DELETE /api/logs ' + r.status + ': ' + detail);
+  }
+  return r.json();
+}
+

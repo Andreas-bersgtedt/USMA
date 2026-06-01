@@ -24,12 +24,14 @@ from .api import events as events_api
 from .api import gcp_auth as gcp_auth_api
 from .api import snowflake_auth as snowflake_auth_api
 from .api import healthz as healthz_api
+from .api import logs as logs_api
 from .api import migrations as migrations_api
 from .api import modules as modules_api
 from .api import runs as runs_api
 from .api import runs_archive as runs_archive_api
 from .api import schema as schema_api
 from .deps import AppState, get_state
+from .log_buffer import attach_to_root
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +58,12 @@ def create_app(
     runs_dir = runs_dir.resolve()
     runs_dir.mkdir(parents=True, exist_ok=True)
     env_file = (env_file or Path(".env")).resolve()
+
+    # Capture WARNING+ records from every module into a bounded
+    # in-memory deque so the SPA's Diagnostics panel can surface them
+    # without disk I/O. Idempotent across repeated create_app() calls
+    # (tests build many apps per process).
+    attach_to_root()
 
     state = AppState(runs_dir=runs_dir, env_file=env_file)
 
@@ -96,6 +104,7 @@ def create_app(
 
     # Routers.
     app.include_router(healthz_api.router, prefix="/api")
+    app.include_router(logs_api.router, prefix="/api/logs")
     app.include_router(schema_api.router, prefix="/api/schema")
     app.include_router(config_api.router, prefix="/api/config")
     app.include_router(effort_card_api.router, prefix="/api/effort-card")

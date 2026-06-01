@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import HelpLink from "../components/HelpLink";
 import {
+  apiClearLogs,
   apiDiscoverBigqueryProjects,
   apiDiscoverDatabricksWorkspaces,
   apiDiscoverFactories,
@@ -11,6 +12,7 @@ import {
   apiGcpAuthStatus,
   apiGetConfig,
   apiGetEffortCard,
+  apiGetLogs,
   apiGetRunAttributionStatus,
   apiImportRunsArchive,
   apiPutConfig,
@@ -23,6 +25,7 @@ import {
   type AppConfig,
   type EffortCardResponse,
   type GcpAuthStatus,
+  type LogRecord,
   type RunsImportMode,
   type RunsImportResult,
   type SnowflakeAuthStatus,
@@ -1255,6 +1258,7 @@ export default function Configuration(): JSX.Element {
 
       <EffortCardEditor />
       <RunAttributionMigration />
+      <SessionLogViewer />
       <RunsBackupRestore />
     </section>
   );
@@ -1838,6 +1842,166 @@ function RunsBackupRestore(): JSX.Element {
           zip-bomb entries are blocked.
         </p>
       </div>
+    </details>
+  );
+}
+
+/**
+ * Collapsible session log viewer.
+ *
+ * Polls /api/logs every 5 s while open and renders the in-memory
+ * deque of WARNING+ records captured by LogBufferHandler. Records
+ * reset on server restart. May contain operator-facing details
+ * (paths, URLs); avoid copy-pasting raw output into public threads.
+ */
+function SessionLogViewer(): JSX.Element {
+  const [records, setRecords] = useState<LogRecord[]>([]);
+  const [level, setLevel] = useState<string>("WARNING");
+  const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = async () => {
+    try {
+      const r = await apiGetLogs({ level, limit: 500 });
+      setRecords(r.records);
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    refresh();
+    const id = window.setInterval(refresh, 5000);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, level]);
+
+  const onClear = async () => {
+    setBusy(true);
+    try {
+      await apiClearLogs();
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onCopy = async () => {
+    const text = records
+      .map((r) => `${r.ts} ${r.level} ${r.logger} � ${r.message}${r.exc ? "\n" + r.exc : ""}`)
+      .join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Best-effort; some browsers block in non-secure contexts.
+    }
+  };
+
+  const errorCount = records.filter((r) => r.level_no >= 40).length;
+  const warnCount = records.filter((r) => r.level_no >= 30 && r.level_no < 40).length;
+
+  return (
+    <details
+      className="card"
+      style={{ marginTop: "1rem" }}
+      open={open}
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+    >
+      <summary style={{ fontWeight: 600, cursor: "pointer" }}>
+        Session log{" "}
+        {errorCount > 0 && (
+          <span className="pill err" style={{ marginLeft: 6 }}>
+            {errorCount} error{errorCount === 1 ? "" : "s"}
+          </span>
+        )}
+        {warnCount > 0 && (
+          <span className="pill warn" style={{ marginLeft: 6 }}>
+            {warnCount} warning{warnCount === 1 ? "" : "s"}
+          </span>
+        )}
+      </summary>
+      <p className="small muted" style={{ marginTop: "0.5rem" }}>
+        Recent warnings, errors, and exceptions captured from the running
+        Python process. Resets when the server restarts. Useful for
+        diagnosing failed runs; messages may include file paths and URLs.
+      </p>
+      <div className="actions" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <label className="small">
+          Level{" "}
+          <select value={level} onChange={(e) => setLevel(e.target.value)}>
+            <option value="DEBUG">DEBUG+</option>
+            <option value="INFO">INFO+</option>
+            <option value="WARNING">WARNING+</option>
+            <option value="ERROR">ERROR+</option>
+            <option value="CRITICAL">CRITICAL</option>
+          </select>
+        </label>
+        <button onClick={refresh} disabled={busy}>
+          Refresh
+        </button>
+        <button onClick={onCopy} disabled={records.length === 0}>
+          Copy all
+        </button>
+        <button onClick={onClear} disabled={busy || records.length === 0}>
+          Clear
+        </button>
+        <span className="small muted">{records.length} record{records.length === 1 ? "" : "s"}</span>
+      </div>
+      {error && (
+        <p className="small" style={{ marginTop: "0.5rem", color: "var(--err, #c33)" }}>
+          {error}
+        </p>
+      )}
+      {records.length === 0 ? (
+        <p className="small muted" style={{ marginTop: "0.5rem" }}>No records.</p>
+      ) : (
+        <div
+          className="table-wrap"
+          style={{ maxHeight: 360, overflow: "auto", marginTop: "0.5rem" }}
+        >
+          <table>
+            <thead>
+              <tr>
+                <th style={{ width: "11em" }}>Time</th>
+                <th style={{ width: "5em" }}>Level</th>
+                <th style={{ width: "16em" }}>Logger</th>
+                <th>Message</th>
+              </tr>
+            </thead>
+            <tbody>
+              {records.map((r) => (
+                <tr key={r.seq}>
+                  <td className="mono small">{r.ts.replace("T", " ").replace("Z", "")}</td>
+                  <td>
+                    <span
+                      className={`pill ${
+                        r.level_no >= 40 ? "err" : r.level_no >= 30 ? "warn" : "muted"
+                      }`}
+                    >
+                      {r.level}
+                    </span>
+                  </td>
+                  <td className="mono small">{r.logger}</td>
+                  <td className="small">
+                    {r.message}
+                    {r.exc && (
+                      <details>
+                        <summary className="muted">Traceback</summary>
+                        <pre className="small" style={{ whiteSpace: "pre-wrap" }}>{r.exc}</pre>
+                      </details>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </details>
   );
 }
