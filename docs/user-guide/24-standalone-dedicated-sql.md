@@ -157,3 +157,141 @@ client:
 - **Estate Overview cloud chip.** Standalone DWU shows the generic
   "Dedicated SQL" label in the type column; the per-cloud Azure chip
   works unchanged.
+
+## End-to-end smoke runbook
+
+Use this checklist the first time you point USMA at a customer's
+standalone Dedicated SQL pool server. It is the same flow Slice E was
+designed to validate; treat it as the production-readiness gate for
+that scope.
+
+### Pre-flight (one-time per server)
+
+1. **Service-principal RBAC.** On the
+   `Microsoft.Sql/servers/<server>` resource (NOT the resource group
+   alone), grant the SP **Reader** so
+   `SqlManagementClient.servers.get` and `databases.list_by_server`
+   succeed. Subscription Reader is only needed if you want
+   auto-discovery to surface the server in the dropdown.
+2. **AAD admin on the SQL server.** The SP can only run
+   `CREATE USER … FROM EXTERNAL PROVIDER` against a database when a
+   server-level AAD admin already exists. If the customer's server
+   has none, set one (e.g. their DBA group) — this is a one-time
+   server-property change in the portal / az CLI.
+3. **Per-database grants.** Sign in to **each DWU database** (master
+   does not need grants) as the AAD admin and run:
+   ```sql
+   CREATE USER [<sp-display-name>] FROM EXTERNAL PROVIDER;
+   EXEC sp_addrolemember 'db_datareader', '<sp-display-name>';
+   GRANT VIEW DATABASE STATE TO [<sp-display-name>];
+   GRANT VIEW DEFINITION TO [<sp-display-name>];
+   ```
+   Skipping `VIEW DEFINITION` will silently drop stored procedures /
+   functions from the `code_objects` collector (you will see views
+   only).
+4. **Networking.** The SP must be able to reach
+   `<server>.database.windows.net` on TCP/1433. If the server has a
+   firewall, add the analyzer host's outbound IP, or enable "Allow
+   Azure services and resources to access this server" for a
+   service-principal-only run.
+5. **ODBC.** Run `sma doctor --offline` first to verify ODBC Driver
+   18 is present; the standalone topology uses the same pyodbc path
+   as workspace pools.
+
+### Live smoke (CLI, single scope)
+
+```powershell
+# .env — minimum keys for a standalone DWU scope
+$env:SMA_SOURCE_TYPE = "synapse_dedicated_sql"
+$env:AZURE_TENANT_ID = "..."
+$env:AZURE_CLIENT_ID = "..."
+$env:AZURE_CLIENT_SECRET = "..."
+$env:AZURE_SUBSCRIPTION_ID = "..."
+$env:SYNAPSE_RESOURCE_GROUP = "<sql-server-rg>"
+$env:SYNAPSE_WORKSPACE_NAME = "<sql-server-name>"
+# Optional: narrow to one DWU database (omit to scan all)
+# $env:SYNAPSE_DEDICATED_POOL = "<database-name>"
+
+# 1. Doctor — confirms ARM token + SQL token both mint cleanly.
+sma doctor
+
+# 2. Dry inventory — fast ARM-only pass to prove discovery works.
+sma analyze-dedicated-pools -f json
+
+# 3. Full run — DMVs + analyzer rules + Fabric mapping.
+sma analyze-all
+```
+
+Expected artefacts under `./output/`:
+
+- `dedicated_pools.json` — one entry per DWU database; paused
+  databases listed with `status: "Paused"` and an `errors` row
+  explaining DMV collection was skipped.
+- `dedicated_pools.md` / `.html` — same content rendered.
+- `fabric_mapping.json` — recommendations consume
+  `dedicated_pools.json` unchanged (Slice D test pins this).
+- `run_manifest.json` — the scope row should show
+  `source_type: "synapse_dedicated_sql"` and an `id` of the form
+  `/subscriptions/.../providers/Microsoft.Sql/servers/<server>`.
+
+### Live smoke (SPA, single scope)
+
+1. Configuration → pick **Dedicated SQL pool** → fill SP fields.
+2. **Discover SQL servers** — dropdown should populate with every
+   `Microsoft.Sql/servers` the SP can read.
+3. **Validate (live)** — three green ConfigCheck rows expected
+   (`arm.servers.get`, `sql.token.mint`,
+   `arm.databases.list_by_server` filtered to DWU).
+4. Run page → pick the `dedicated_pools` + `fabric_mapping` modules
+   → **Start run**.
+5. Once finished, **Estate Overview** should show a new tile with
+   the cloud chip `azure` and the type label `Dedicated SQL pool
+   (formerly SQL DW)`.
+
+### Verification checklist
+
+| # | Check | How to verify |
+|---|---|---|
+| 1 | Discovery returned at least one server | SPA dropdown is non-empty; CLI run prints `Found N SQL server(s)` |
+| 2 | At least one DWU database was found | `dedicated_pools.json` has ≥ 1 pool entry; non-DWU databases are filtered out by `sku.tier == "DataWarehouse"` |
+| 3 | DMV collection ran | `pools[i].tables` / `code_objects` non-empty for any `Online` database |
+| 4 | Paused databases handled gracefully | `pools[i].status == "Paused"` carries a non-fatal caveat in `errors`, not a top-level run failure |
+| 5 | Fabric mapping consumed the artefact | `fabric_mapping.json` exists; `recommendations` non-empty for any non-trivial pool |
+| 6 | Estate Overview cloud bucket is `azure` | `/api/estate` JSON includes `cloud: "azure"` for the new workspace key |
+| 7 | Run manifest stamps the new source type | `run.json` → `scopes[0].source_type == "synapse_dedicated_sql"` |
+| 8 | Cost module behaves predictably | `cost.json` lands in `by_resource_kind.other` (known limit; not a failure) |
+
+### Gotchas learned during development
+
+- **`master` database leaks in if you bypass the filter.** The ARM
+  client must keep its `sku.tier == "DataWarehouse"` guard — `master`
+  is reported with `sku.tier == "System"` and a `null` capacity,
+  which would crash the DWU column. Don't widen the filter.
+- **SKU tier capitalisation.** The Azure REST API returns
+  `"DataWarehouse"` (PascalCase) for DWU databases. Don't lowercase
+  before comparing.
+- **`SYNAPSE_DEDICATED_POOL` is a database-name filter, not a pool
+  name.** For the standalone topology it scopes the DMV pass to a
+  single database; for workspace pools it scopes to a single pool
+  name. Same key, two slightly different meanings — documented in
+  the env-vars sample above to avoid surprise.
+- **Custom AAD audience is shared with Synapse.** The SQL token
+  uses `https://database.windows.net/.default` for both topologies.
+  No new app-registration permission is needed; the existing
+  Synapse SP credential works as-is.
+- **Standalone DWU servers don't expose a `dev.azuresynapse.net`
+  data plane.** Anything that lives behind Synapse Studio (Spark
+  pools, pipelines, serverless SQL, lake databases) simply does not
+  exist on a standalone DWU server. The Configuration page hides
+  those modules behind the source-type predicate; the CLI's
+  `analyze-all` skips them via `MODULE_SPECS[*].supports_source`.
+- **Firewall / private-endpoint surprises.** Standalone DWU servers
+  more commonly have customer-managed firewalls than Synapse
+  workspaces. The DMV pass fails fast with a clear
+  `pyodbc.OperationalError` if the analyzer host's egress IP is not
+  whitelisted — surface that gotcha early in the runbook.
+- **AAD admin gap is the #1 setup failure mode.** Without a
+  server-level AAD admin, the `CREATE USER … FROM EXTERNAL
+  PROVIDER` step in pre-flight #3 fails with a misleading
+  permissions error; verify in the portal before reaching for
+  RBAC.

@@ -1,7 +1,7 @@
 # Standalone Dedicated SQL pool (formerly SQL DW) — design + plan
 
 > **Branch:** `feature/standalone-dedicated-sql-dw`
-> **Status:** Slice D complete (`fabric_mapping` widened; estate cloud bucket / scope-dir regex / SPA labels verified); Slice E runbook documented, awaiting live customer smoke
+> **Status:** Slice E runbook complete (user-guide ch. 24); awaiting live customer execution. Slices A–D shipped.
 > **Related:** [ADR-0009](../adr/0009-standalone-dedicated-sql.md)
 
 ## Problem
@@ -150,7 +150,7 @@ SQL access token for standalone scopes.
 | B — Web SPA Configuration | Surface the new source type in the Configuration page (radio entry + server-name field), live validation via the new provider, `web/config_io.py` read/write/validate, `/api/config/discover-sql-servers` endpoint, estate-card label. | ✅ done |
 | C — Documentation & telemetry | New `docs/user-guide/24-standalone-dedicated-sql.md`, update `access_manifest.py`, `QUICKSTART.md`, `CHANGELOG.md`. | ✅ done |
 | D — Estate overview + Fabric mapping | Verify the standalone descriptor surfaces correctly in the Estate Overview tile and that the existing `fabric_mapping` rules consume the dedicated-pool artifact unchanged. | ✅ done |
-| E — End-to-end smoke against a real customer scope | Validate against the dev tenant that triggered the report; document runbook gotchas. | 🟡 runbook documented; live smoke pending on customer tenant |
+| E — End-to-end smoke against a real customer scope | Validate against the dev tenant that triggered the report; document runbook gotchas. | ✅ runbook documented in user-guide ch. 24 ("End-to-end smoke runbook"); awaiting customer execution |
 
 ## Out of scope
 

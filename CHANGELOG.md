@@ -63,6 +63,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   standalone topology; the equivalent
   `Microsoft.Sql/servers/.../databases` metric wiring is a follow-up.
 
+### Slice D — Estate overview + Fabric mapping (this release)
+
+- `MODULE_SPECS["fabric_mapping"].supports` now includes
+  `SYNAPSE_DEDICATED_SQL`, so a standalone DWU scope automatically
+  gets the same `dedicated_pools.json` → `fabric_mapping.json`
+  pipeline as a workspace-attached pool. No rule changes needed —
+  the analyzer reads the artefact, not the source type.
+- `web/storage.py` `_SCOPE_DIR_RE` widened to accept
+  `synapse_dedicated_sql__<slug>` so multi-scope runs enumerate
+  per-scope artefacts correctly.
+- SPA: `ScopeRef.source_type` literal widened in
+  `web/src/api/loader.ts`; `SOURCE_TYPE_LABELS` /
+  `SOURCE_NOUN_LABELS` in `web/src/lib/labels.ts` gain
+  "Dedicated SQL pool (formerly SQL DW)" / "server";
+  `ScopeFilter` source-label map gains a "Dedicated SQL" chip.
+- 4 new guardrail tests in
+  [tests/test_dedicated_pools_slice_d.py](tests/test_dedicated_pools_slice_d.py):
+  fabric_mapping predicate, scope-dir regex (incl. traversal
+  rejection), Estate Overview cloud bucket = `azure`, and an
+  end-to-end run of `FabricMappingAnalyzer` over a hand-built
+  standalone `dedicated_pools.json` to prove the rules fire unchanged.
+
+### Slice E — End-to-end smoke runbook (this release)
+
+- New "End-to-end smoke runbook" section in
+  [docs/user-guide/24-standalone-dedicated-sql.md](docs/user-guide/24-standalone-dedicated-sql.md):
+  pre-flight RBAC + db-level grants + AAD-admin checklist, CLI
+  smoke commands, SPA walk-through, an 8-row verification table,
+  and a "Gotchas learned during development" section covering the
+  `master` database, SKU tier capitalisation, the
+  `SYNAPSE_DEDICATED_POOL` reuse, AAD audience sharing, firewall
+  surprises, and the AAD-admin gap as the #1 setup failure mode.
+
 ## [5.3.3] - 2026-06-01
 
 ### Fixed
