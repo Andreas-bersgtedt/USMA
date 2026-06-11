@@ -82,7 +82,13 @@ class ScopeRef(BaseModel):
     Optional fields stay loose to keep early-bring-up integration easy.
     """
     source_type: Literal[
-        "synapse_workspace", "adf", "databricks", "bigquery", "snowflake", "sap_bw",
+        "synapse_workspace",
+        "adf",
+        "databricks",
+        "bigquery",
+        "snowflake",
+        "sap_bw",
+        "synapse_dedicated_sql",
     ] = "synapse_workspace"
     id: str = Field(..., description="ARM id or provider-specific stable id")
     display_name: str = Field(..., description="Human-friendly label shown in the UI")
@@ -140,7 +146,17 @@ class AzureConfigPublic(BaseModel):
     # workspace; ``adf`` switches the Configuration page (and
     # ``load_config``) over to interpreting ``SYNAPSE_RESOURCE_GROUP``
     # / ``SYNAPSE_WORKSPACE_NAME`` as the ADF factory's RG + name.
-    source_type: Literal["synapse_workspace", "adf", "databricks", "bigquery", "snowflake"] = "synapse_workspace"
+    # Phase 6.B — ``synapse_dedicated_sql`` reinterprets the same fields
+    # as a standalone ``Microsoft.Sql/servers/<server>`` (see ADR-0009).
+    source_type: Literal[
+        "synapse_workspace",
+        "adf",
+        "databricks",
+        "bigquery",
+        "snowflake",
+        "synapse_dedicated_sql",
+    ] = "synapse_workspace"
+
     tenant_id: str | None = None
     client_id: str | None = None
     client_secret: Literal["set", "unset"] = "unset"
@@ -202,7 +218,14 @@ class AppConfigPublic(BaseModel):
 
 
 class AzureConfigUpdate(BaseModel):
-    source_type: Literal["synapse_workspace", "adf", "databricks", "bigquery", "snowflake"] | None = None
+    source_type: Literal[
+        "synapse_workspace",
+        "adf",
+        "databricks",
+        "bigquery",
+        "snowflake",
+        "synapse_dedicated_sql",
+    ] | None = None
     tenant_id: str | None = None
     client_id: str | None = None
     client_secret: str | None = Field(

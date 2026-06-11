@@ -20,4 +20,5 @@ export type SourceTypeId =
   | "bigquery"
   | "sap_bw"
   | "sql_server"
-  | "snowflake";
+  | "snowflake"
+  | "synapse_dedicated_sql";

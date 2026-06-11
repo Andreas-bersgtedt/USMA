@@ -46,11 +46,16 @@ class SourceType(StrEnum):
     """
 
     SYNAPSE_WORKSPACE = "synapse_workspace"
+    # Standalone "Dedicated SQL pool (formerly SQL DW)" — a
+    # ``Microsoft.Sql/servers/<server>/databases/<db>`` resource with
+    # ``edition='DataWarehouse'`` that has no parent Synapse workspace.
+    # See ADR-0009.
+    SYNAPSE_DEDICATED_SQL = "synapse_dedicated_sql"
     ADF = "adf"
     DATABRICKS = "databricks"
     BIGQUERY = "bigquery"
     SAP_BW = "sap_bw"
-    SQL_SERVER = "sql_server"  # future
+    SQL_SERVER = "sql_server"  # future (on-prem SQL Server / SSIS)
     SNOWFLAKE = "snowflake"    # future
 
 
@@ -258,6 +263,7 @@ def databricks_platform(descriptor: SourceDescriptor) -> str:
 # safe to import them eagerly even when their optional extras are absent.
 # ---------------------------------------------------------------------------
 from . import synapse_workspace as _synapse_workspace  # noqa: E402, F401
+from . import synapse_dedicated_sql as _synapse_dedicated_sql  # noqa: E402, F401
 from . import adf as _adf  # noqa: E402, F401
 from . import databricks as _databricks  # noqa: E402, F401
 from . import bigquery as _bigquery  # noqa: E402, F401

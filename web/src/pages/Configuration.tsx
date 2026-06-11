@@ -6,6 +6,7 @@ import {
   apiDiscoverDatabricksWorkspaces,
   apiDiscoverFactories,
   apiDiscoverSnowflakeDatabases,
+  apiDiscoverSqlServers,
   apiDiscoverWorkspaces,
   apiExportRunsArchive,
   apiGcpAuthLogin,
@@ -60,6 +61,7 @@ function discoverFor(src: SourceType): () => Promise<ValidateResponse> {
   if (src === "databricks") return apiDiscoverDatabricksWorkspaces;
   if (src === "bigquery") return apiDiscoverBigqueryProjects;
   if (src === "snowflake") return apiDiscoverSnowflakeDatabases;
+  if (src === "synapse_dedicated_sql") return apiDiscoverSqlServers;
   return apiDiscoverWorkspaces;
 }
 
@@ -68,12 +70,14 @@ function scopeNoun(src: SourceType): string {
   if (src === "adf") return "factory";
   if (src === "bigquery") return "project";
   if (src === "snowflake") return "account";
+  if (src === "synapse_dedicated_sql") return "SQL server";
   return "workspace";
 }
 function scopeNounPlural(src: SourceType, count: number): string {
   if (src === "adf") return count === 1 ? "factory" : "factories";
   if (src === "bigquery") return count === 1 ? "project" : "projects";
   if (src === "snowflake") return count === 1 ? "account" : "accounts";
+  if (src === "synapse_dedicated_sql") return count === 1 ? "SQL server" : "SQL servers";
   return count === 1 ? "workspace" : "workspaces";
 }
 
@@ -83,6 +87,7 @@ function scopeLabel(src: SourceType): string {
   if (src === "databricks") return "Databricks workspace";
   if (src === "bigquery") return "GCP project";
   if (src === "snowflake") return "Snowflake account";
+  if (src === "synapse_dedicated_sql") return "SQL server";
   return "Synapse workspace";
 }
 function discoverVerbObject(src: SourceType): string {
@@ -90,6 +95,7 @@ function discoverVerbObject(src: SourceType): string {
   if (src === "databricks") return "Databricks workspaces";
   if (src === "bigquery") return "GCP projects";
   if (src === "snowflake") return "Snowflake account";
+  if (src === "synapse_dedicated_sql") return "SQL servers";
   return "workspaces";
 }
 
@@ -418,6 +424,17 @@ export default function Configuration(): JSX.Element {
           <button
             type="button"
             role="radio"
+            aria-checked={cfg.azure.source_type === "synapse_dedicated_sql"}
+            className={cfg.azure.source_type === "synapse_dedicated_sql" ? "pill ok" : "pill"}
+            onClick={() => onChangeSourceType("synapse_dedicated_sql")}
+            disabled={saving}
+            title="Inventory a standalone Dedicated SQL pool (formerly SQL DW) — Microsoft.Sql/servers with one or more databases whose edition is DataWarehouse. Reuses the dedicated_pools module unchanged."
+          >
+            Dedicated SQL pool
+          </button>
+          <button
+            type="button"
+            role="radio"
             aria-checked={cfg.azure.source_type === "adf"}
             className={cfg.azure.source_type === "adf" ? "pill ok" : "pill"}
             onClick={() => onChangeSourceType("adf")}
@@ -469,6 +486,8 @@ export default function Configuration(): JSX.Element {
                 ? "BigQuery mode: runs the bigquery_workloads + cost + fabric_mapping modules. Auth uses Application Default Credentials — set GOOGLE_APPLICATION_CREDENTIALS to a service-account JSON key or run 'gcloud auth application-default login'. Cost attribution reads the BigQuery billing-export tables — set SMA_GCP_BILLING_DATASET and SMA_GCP_BILLING_TABLE (or SMA_GCP_BILLING_ACCOUNT) to enable."
                 : cfg.azure.source_type === "snowflake"
                   ? "Snowflake mode: runs the snowflake_workloads + fabric_mapping modules. Auth uses key-pair JWT — provide account, user, private key (PEM string or file path), optional passphrase, role, and warehouse below. The cloud platform (AWS / Azure / GCP) is inferred from CURRENT_REGION() at run time."
+                  : cfg.azure.source_type === "synapse_dedicated_sql"
+                    ? "Dedicated SQL pool mode: runs the dedicated_pools module against a standalone Microsoft.Sql/servers (formerly SQL DW). Select the SQL server below; the server must host one or more databases whose edition is DataWarehouse. The dedicated-pool name field is an optional filter to one specific database."
                   : "Synapse mode: all inventory modules run against the selected workspace."}
         </p>
         {cfg.azure.source_type === "databricks" && (
@@ -546,9 +565,14 @@ export default function Configuration(): JSX.Element {
               onChange={(e) => update("azure", "subscription_id", e.target.value)}
             />
           </label>
-          {cfg.azure.source_type === "synapse_workspace" && (
+          {(cfg.azure.source_type === "synapse_workspace" ||
+            cfg.azure.source_type === "synapse_dedicated_sql") && (
             <label>
-              <span>Dedicated pool (optional)</span>
+              <span>
+                {cfg.azure.source_type === "synapse_dedicated_sql"
+                  ? "Dedicated SQL pool / database (optional)"
+                  : "Dedicated pool (optional)"}
+              </span>
               <input
                 type="text"
                 value={cfg.azure.dedicated_pool ?? ""}

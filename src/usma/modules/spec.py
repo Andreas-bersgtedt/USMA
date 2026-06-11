@@ -67,6 +67,14 @@ def _spec(
 MODULE_SPECS: dict[str, ModuleSpec] = {
     "dedicated_pools": _spec(
         "dedicated_pools",
+        # Both Synapse-workspace pools and standalone Dedicated SQL
+        # pools (formerly SQL DW) share the same data-plane analyzer
+        # (DMVs, distribution advisor, T-SQL gap rollup); only ARM
+        # discovery differs (see ADR-0009).
+        supports=frozenset({
+            SourceType.SYNAPSE_WORKSPACE,
+            SourceType.SYNAPSE_DEDICATED_SQL,
+        }),
         description="Dedicated SQL pool inventory and Fabric readiness.",
     ),
     "serverless_pools": _spec(

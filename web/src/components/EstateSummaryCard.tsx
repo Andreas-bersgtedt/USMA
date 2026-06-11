@@ -25,6 +25,7 @@ const TYPE_LABEL: Record<SourceTypeId, string> = {
   sap_bw: "SAP BW",
   sql_server: "SQL Server",
   snowflake: "Snowflake",
+  synapse_dedicated_sql: "Dedicated SQL",
 };
 
 export default function EstateSummaryCard({

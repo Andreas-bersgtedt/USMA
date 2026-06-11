@@ -90,7 +90,7 @@ _GUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F
 def read_config(env_file: Path) -> AppConfigPublic:
     values = dotenv_values(env_file) if env_file.exists() else {}
     source_type_raw = (values.get(_SOURCE_TYPE_KEY) or "synapse_workspace").strip().lower()
-    source_type = source_type_raw if source_type_raw in {"synapse_workspace", "adf", "databricks", "bigquery", "snowflake"} else "synapse_workspace"
+    source_type = source_type_raw if source_type_raw in {"synapse_workspace", "adf", "databricks", "bigquery", "snowflake", "synapse_dedicated_sql"} else "synapse_workspace"
     # Phase 4.7 — Databricks cloud platform. ``None`` (env var absent)
     # is the canonical "unset = azure" signal and surfaces as ``None``
     # in the public payload so the SPA can render an inferred default.
@@ -486,6 +486,86 @@ def discover_factories(env_file: Path) -> tuple[list[ConfigCheck], list[Workspac
         name="ADF factories visible (subscription Reader)",
         ok=True,
         detail=f"{len(workspaces)} factory(ies) visible to the SP",
+        category="Control plane",
+    ))
+    return checks, workspaces
+
+
+def discover_sql_servers(env_file: Path) -> tuple[list[ConfigCheck], list[WorkspaceSummary]]:
+    """List Azure SQL servers visible to the SP in the configured subscription.
+
+    Phase 6.B (ADR-0009) — symmetric with :func:`discover_workspaces` /
+    :func:`discover_factories`, but bound to the standalone Dedicated SQL
+    pool topology (``Microsoft.Sql/servers``). Each :class:`WorkspaceSummary`
+    represents one SQL server; ``sql_endpoint`` carries the
+    ``<server>.database.windows.net`` FQDN so the SPA's dropdown can show
+    the same hint shape used for Synapse workspaces.
+    """
+    from ..sources import (
+        Credentials as ProviderCredentials,
+        SourceType,
+        get_provider,
+    )
+
+    checks: list[ConfigCheck] = []
+    workspaces: list[WorkspaceSummary] = []
+    values = dotenv_values(env_file) if env_file.exists() else {}
+
+    missing = [k for k in _REQUIRED_DISCOVER if not values.get(k)]
+    if missing:
+        checks.append(ConfigCheck(
+            name="SQL server discovery",
+            ok=False,
+            detail=(
+                "missing required fields: "
+                + ", ".join(missing)
+                + " — fill in Tenant, Client, Secret, Subscription and Save first"
+            ),
+            category="Control plane",
+        ))
+        return checks, workspaces
+
+    creds = ProviderCredentials(
+        tenant_id=values["AZURE_TENANT_ID"],
+        client_id=values["AZURE_CLIENT_ID"],
+        client_secret=values["AZURE_CLIENT_SECRET"],
+    )
+    subscription = values["AZURE_SUBSCRIPTION_ID"]
+    current_server = values.get("SYNAPSE_WORKSPACE_NAME") or None
+
+    provider = get_provider(SourceType.SYNAPSE_DEDICATED_SQL)
+    try:
+        descriptors = provider.discover(creds, subscription_id=subscription)
+    except Exception as exc:  # noqa: BLE001
+        checks.append(ConfigCheck(
+            name="SQL servers visible (subscription Reader)",
+            ok=False,
+            detail=str(exc),
+            category="Control plane",
+        ))
+        return checks, workspaces
+
+    checks.append(ConfigCheck(
+        name="AAD token (ARM)", ok=True,
+        detail="https://management.azure.com/.default",
+        category="Control plane",
+    ))
+
+    workspaces = [
+        WorkspaceSummary(
+            name=d.display_name,
+            resource_group=d.resource_group or "",
+            location=d.location,
+            sql_endpoint=d.extras.get("sql_server_fqdn"),
+            sql_on_demand_endpoint=None,
+            is_current=bool(current_server) and d.display_name == current_server,
+        )
+        for d in descriptors
+    ]
+    checks.append(ConfigCheck(
+        name="SQL servers visible (subscription Reader)",
+        ok=True,
+        detail=f"{len(workspaces)} server(s) visible to the SP",
         category="Control plane",
     ))
     return checks, workspaces
@@ -1134,6 +1214,68 @@ def validate_config_live(env_file: Path) -> tuple[list[ConfigCheck], list[Worksp
         except Exception as exc:  # noqa: BLE001
             checks.append(ConfigCheck(
                 name="Databricks workspaces visible (subscription Reader)",
+                ok=False,
+                detail=str(exc),
+                category="Control plane",
+            ))
+        return checks, workspaces
+
+    if source_type_raw == "synapse_dedicated_sql":
+        # Phase 6.B (ADR-0009) — standalone Dedicated SQL pool branch.
+        # Delegate to SynapseDedicatedSqlProvider.validate() and skip the
+        # Synapse-workspace ARM probe / Artifacts REST checks (irrelevant
+        # for a Microsoft.Sql/servers scope). Mirrors the ADF/Databricks
+        # branches above.
+        from ..sources import (
+            Credentials as ProviderCredentials,
+            SourceDescriptor,
+            SourceType,
+            get_provider,
+        )
+
+        creds = ProviderCredentials(
+            tenant_id=values["AZURE_TENANT_ID"],
+            client_id=values["AZURE_CLIENT_ID"],
+            client_secret=values["AZURE_CLIENT_SECRET"],
+        )
+        sub = values["AZURE_SUBSCRIPTION_ID"]
+        rg = values["SYNAPSE_RESOURCE_GROUP"]
+        server = values["SYNAPSE_WORKSPACE_NAME"]
+        descriptor = SourceDescriptor(
+            type=SourceType.SYNAPSE_DEDICATED_SQL,
+            id=(
+                f"/subscriptions/{sub}/resourceGroups/{rg}"
+                f"/providers/Microsoft.Sql/servers/{server}"
+            ),
+            display_name=server,
+            subscription_id=sub,
+            resource_group=rg,
+            extras={"sql_server_fqdn": f"{server}.database.windows.net"},
+        )
+        provider = get_provider(SourceType.SYNAPSE_DEDICATED_SQL)
+        for pc in provider.validate(descriptor, creds):
+            checks.append(ConfigCheck(
+                name=pc.name,
+                ok=pc.ok,
+                detail=pc.detail or None,
+                category=pc.category,
+            ))
+        try:
+            descriptors = provider.discover(creds, subscription_id=sub)
+            workspaces = [
+                WorkspaceSummary(
+                    name=d.display_name,
+                    resource_group=d.resource_group or "",
+                    location=d.location,
+                    sql_endpoint=d.extras.get("sql_server_fqdn"),
+                    sql_on_demand_endpoint=None,
+                    is_current=d.display_name == server,
+                )
+                for d in descriptors
+            ]
+        except Exception as exc:  # noqa: BLE001
+            checks.append(ConfigCheck(
+                name="SQL servers visible (subscription Reader)",
                 ok=False,
                 detail=str(exc),
                 category="Control plane",

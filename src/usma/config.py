@@ -200,6 +200,8 @@ def load_config(env_file: str | os.PathLike[str] | None = None) -> AppConfig:
     # callers replace this via ``dataclasses.replace``.
     if source_type_raw == "adf":
         scopes: tuple[SourceDescriptor, ...] = (_legacy_adf_scope(azure),)
+    elif source_type_raw == "synapse_dedicated_sql":
+        scopes = (_legacy_dedicated_sql_scope(azure),)
     elif source_type_raw == "databricks":
         if is_aws_dbx:
             scopes = (_legacy_databricks_aws_scope(),)
@@ -249,6 +251,33 @@ def _legacy_adf_scope(azure: AzureConfig) -> SourceDescriptor:
         display_name=azure.workspace_name,
         subscription_id=azure.subscription_id,
         resource_group=azure.resource_group,
+    )
+
+
+def _legacy_dedicated_sql_scope(azure: AzureConfig) -> SourceDescriptor:
+    """Build the implicit single standalone-DWU scope from the legacy env vars.
+
+    Re-uses ``SYNAPSE_RESOURCE_GROUP`` + ``SYNAPSE_WORKSPACE_NAME``
+    (interpreted as the **SQL server name**, e.g.
+    ``devlebdatalakesql``) so users only need to flip
+    ``SMA_SOURCE_TYPE=synapse_dedicated_sql`` to switch the
+    Configuration page over to a standalone Dedicated SQL pool
+    (formerly SQL DW) run. ``SYNAPSE_DEDICATED_POOL`` is an optional
+    filter that narrows the inventory to a single database name. See
+    ADR-0009.
+    """
+    arm_id = (
+        f"/subscriptions/{azure.subscription_id}"
+        f"/resourceGroups/{azure.resource_group}"
+        f"/providers/Microsoft.Sql/servers/{azure.workspace_name}"
+    )
+    return SourceDescriptor(
+        type=SourceType.SYNAPSE_DEDICATED_SQL,
+        id=arm_id,
+        display_name=azure.workspace_name,
+        subscription_id=azure.subscription_id,
+        resource_group=azure.resource_group,
+        extras={"sql_server_fqdn": f"{azure.workspace_name}.database.windows.net"},
     )
 
 

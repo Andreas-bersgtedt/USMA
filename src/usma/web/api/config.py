@@ -13,6 +13,7 @@ from ..config_io import (
     discover_databricks_workspaces,
     discover_factories,
     discover_snowflake_databases,
+    discover_sql_servers,
     discover_workspaces,
     read_config,
     validate_config,
@@ -99,6 +100,28 @@ def discover_adf(
     factory name, ``resource_group`` = the factory's RG).
     """
     checks, workspaces = discover_factories(state.env_file)
+    return ValidateConfigResponse(
+        ok=all(c.ok for c in checks),
+        checks=checks,
+        workspaces=workspaces,
+    )
+
+
+@router.post("/discover-sql-servers", response_model=ValidateConfigResponse)
+def discover_sql(
+    state: AppState = Depends(get_state),
+) -> ValidateConfigResponse:
+    """Enumerate Azure SQL servers the saved SP can see in the subscription.
+
+    Phase 6.B (ADR-0009) — symmetric with ``/discover-workspaces`` and
+    ``/discover-factories``, but bound to the standalone Dedicated SQL
+    pool topology (``Microsoft.Sql/servers``). The Configuration page
+    calls this endpoint when the user toggles **Source type = Dedicated
+    SQL pool**. Each :class:`WorkspaceSummary` represents one SQL server
+    (``name`` = server name, ``resource_group`` = the server's RG,
+    ``sql_endpoint`` = ``<server>.database.windows.net``).
+    """
+    checks, workspaces = discover_sql_servers(state.env_file)
     return ValidateConfigResponse(
         ok=all(c.ok for c in checks),
         checks=checks,

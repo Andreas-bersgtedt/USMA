@@ -454,7 +454,7 @@ export type RunMeta = {
   carried_from?: Record<string, string>;
 };
 
-export type SourceType = "synapse_workspace" | "adf" | "databricks" | "bigquery" | "snowflake";
+export type SourceType = "synapse_workspace" | "adf" | "databricks" | "bigquery" | "snowflake" | "synapse_dedicated_sql";
 
 export type AppConfig = {
   azure: {
@@ -644,6 +644,15 @@ export async function apiDiscoverFactories(): Promise<ValidateResponse> {
     headers: API_HEADERS,
   });
   if (!r.ok) throw new Error(`POST /api/config/discover-factories: HTTP ${r.status}`);
+  return r.json() as Promise<ValidateResponse>;
+}
+
+export async function apiDiscoverSqlServers(): Promise<ValidateResponse> {
+  const r = await fetch(`/api/config/discover-sql-servers`, {
+    method: "POST",
+    headers: API_HEADERS,
+  });
+  if (!r.ok) throw new Error(`POST /api/config/discover-sql-servers: HTTP ${r.status}`);
   return r.json() as Promise<ValidateResponse>;
 }
 
