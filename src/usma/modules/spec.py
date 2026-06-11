@@ -95,6 +95,15 @@ MODULE_SPECS: dict[str, ModuleSpec] = {
     ),
     "monitoring": _spec(
         "monitoring",
+        # Both Synapse-workspace pools and standalone Dedicated SQL
+        # pools (formerly SQL DW) expose DWU metrics via Azure Monitor.
+        # The analyzer dispatches to the correct ARM listing path and
+        # rewrites snake_case standalone metric names to the workspace
+        # PascalCase set (see ADR-0009 + monitor_client.STANDALONE_TO_WORKSPACE_METRIC).
+        supports=frozenset({
+            SourceType.SYNAPSE_WORKSPACE,
+            SourceType.SYNAPSE_DEDICATED_SQL,
+        }),
         description="Monitor/Log Analytics signals and run-history rollups.",
     ),
     "storage": _spec(

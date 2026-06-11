@@ -95,6 +95,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `master` database, SKU tier capitalisation, the
   `SYNAPSE_DEDICATED_POOL` reuse, AAD audience sharing, firewall
   surprises, and the AAD-admin gap as the #1 setup failure mode.
+- **Slice F — Standalone Dedicated SQL pool monitoring (DWU
+  utilization for Fabric capacity sizing).** The `monitoring`
+  module now collects Azure Monitor metrics for standalone DWU
+  pools so `fabric_mapping.cu_projection` can derive a Fabric SKU
+  recommendation from real DWU utilization (peak DWU × DWU→CU rate
+  + headroom), matching the workspace path exactly. Resolves the
+  client request *"I now want the DWU utilization so I can do
+  Fabric mappings"*.
+  - `MonitoringClient.list_standalone_dwu_resource_ids()` enumerates
+    DWU-tier databases on `Microsoft.Sql/servers/<server>` via
+    `SqlManagementClient.databases.list_by_server` filtered to
+    `sku.tier == 'DataWarehouse'`, honouring the optional
+    single-pool filter.
+  - `STANDALONE_DWU_POOL_METRICS` requests the snake_case metric
+    names exposed by the `Microsoft.Sql/servers/databases` provider
+    (`dwu_limit`, `dwu_used`, `dwu_consumption_percent`,
+    `active_queries`, `queued_queries`, `connection_successful`,
+    `connection_failed`, `blocked_by_firewall`,
+    `memory_usage_percent`, `cpu_percent`).
+  - `fetch_metrics(metric_name_map=...)` rewrites returned names
+    via `STANDALONE_TO_WORKSPACE_METRIC` so downstream consumers
+    (`dwu_hours`, `fabric_mapping.cu_projection`) key uniformly on
+    the workspace PascalCase set (`DWULimit`, `DWUUsedPercent`,
+    `Connections`, …) regardless of source topology.
+  - `MonitoringAnalyzer.run()` dispatches by
+    `cfg.primary_scope().type` — `SYNAPSE_DEDICATED_SQL` →
+    standalone listing + standalone metric set + alias map;
+    everything else → unchanged workspace path.
+  - `MODULE_SPECS["monitoring"].supports` widened to include
+    `SYNAPSE_DEDICATED_SQL`; SPA Run page whitelist now exposes
+    the **Monitoring** checkbox for standalone Dedicated SQL pool
+    scopes. The customer's existing scan output at
+    `dedicated_pools.json` now sits alongside a populated
+    `monitoring.json` that `fabric_mapping` consumes for capacity
+    projection.
+  - New `tests/test_monitoring_standalone_dwu.py` (7 cases): SKU
+    filter, single-pool filter, missing-id skip, name rewriting
+    with and without an alias map, end-to-end scope dispatch in
+    the analyzer, and the module-spec predicate.
 
 ### Fixed
 
