@@ -133,6 +133,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a pointer to "user-guide §24 'AAD admin on the SQL server'"
   because the missing server-level Azure AD admin is the
   #1 setup failure mode for standalone DWU.
+- **Dedicated pool DMV connection — recognise the
+  `<token-identified principal>` rejection.** This 28000 / 18456
+  signature means the AAD admin **is** configured (the gateway
+  accepted the token) but the service principal has no contained
+  AAD user in the target database. Retrying with a different auth
+  mechanism produces an identical error, so we now surface the
+  failure immediately (no pointless retry) with a targeted hint:
+  `CREATE USER [<sp-display-name>] FROM EXTERNAL PROVIDER;
+  ALTER ROLE db_datareader ADD MEMBER [<sp-display-name>];
+  GRANT VIEW DATABASE STATE TO [<sp-display-name>];
+  GRANT VIEW DEFINITION TO [<sp-display-name>]` — connected to
+  the database (not master) as the AAD admin. See user-guide §24
+  "Pre-flight checklist".
 
 ## [5.3.3] - 2026-06-01
 

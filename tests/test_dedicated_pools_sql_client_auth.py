@@ -212,3 +212,58 @@ def test_open_aggregated_error_omits_aad_admin_hint_when_one_attempt_is_differen
     msg = str(ei.value)
     assert "no Azure AD admin set" not in msg
     assert "[Authentication=ActiveDirectoryServicePrincipal]" in msg
+
+
+def _make_token_principal_unmapped_error() -> pyodbc.Error:
+    # The signature seen when the AAD admin is set on the server but the
+    # SP has no contained user in the target database. Token *is*
+    # accepted by the gateway — the database itself rejects the
+    # principal.
+    return pyodbc.Error(
+        "28000",
+        "[28000] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]"
+        "Login failed for user '<token-identified principal>'. (18456) "
+        "(SQLDriverConnect); [28000] [Microsoft][ODBC Driver 18 for SQL Server]"
+        "[SQL Server]Login failed for user '<token-identified principal>'. (18456)",
+    )
+
+
+def test_is_token_principal_unmapped_recognises_signature():
+    exc = _make_token_principal_unmapped_error()
+    assert mod._is_token_principal_unmapped(exc) is True
+
+
+def test_is_token_principal_unmapped_rejects_other_28000():
+    # Empty-user signature is a different problem (no AAD admin set);
+    # must not be classified as the unmapped-user case.
+    exc = pyodbc.Error("28000", "[28000] Login failed for user ''. (18456)")
+    assert mod._is_token_principal_unmapped(exc) is False
+
+
+def test_open_does_not_retry_on_token_principal_unmapped(monkeypatch):
+    """The SP-direct fallback is pointless for token-identified-principal
+    rejections — switching auth method produces an identical error. The
+    code must surface the targeted hint immediately."""
+    cfg = _make_cfg()
+    client = DedicatedPoolSqlClient(cfg, "demoserver.database.windows.net", "testdedicatedpool")
+    monkeypatch.setattr(mod, "get_sql_access_token", lambda _azure: "fake-token")
+    monkeypatch.setattr(mod, "resolve_odbc_driver", lambda _d: "ODBC Driver 18 for SQL Server")
+
+    err = _make_token_principal_unmapped_error()
+    with patch.object(mod.pyodbc, "connect", side_effect=err) as connect:
+        with pytest.raises(mod._DedicatedPoolAuthError) as ei:
+            client._open()
+
+    # Only one connection attempt — no retry.
+    assert connect.call_count == 1
+
+    msg = str(ei.value)
+    assert "no contained AAD user in database 'testdedicatedpool'" in msg
+    assert "CREATE USER" in msg
+    assert "FROM EXTERNAL PROVIDER" in msg
+    assert "db_datareader" in msg
+    assert "VIEW DATABASE STATE" in msg
+    # Confirm the misleading empty-user hint is NOT emitted for this signature.
+    assert "no Azure AD admin set" not in msg
+    # Original ODBC error text should still be present so the user can grep for it.
+    assert "<token-identified principal>" in msg

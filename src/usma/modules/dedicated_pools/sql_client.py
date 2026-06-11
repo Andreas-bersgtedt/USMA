@@ -47,6 +47,25 @@ def _is_aad_token_rejected(exc: pyodbc.Error) -> bool:
     )
 
 
+# A different 28000 / 18456 signature: ``Login failed for user
+# '<token-identified principal>'``. This means the AAD admin **is**
+# configured (the gateway accepted the token) but the service
+# principal has no contained AAD user in the target database. There
+# is no auth-mechanism fallback that fixes this — the user has to run
+# ``CREATE USER [<sp-display-name>] FROM EXTERNAL PROVIDER`` inside
+# the database. Detecting it lets us (a) skip the pointless SP-direct
+# retry that will produce an identical error, and (b) emit a hint
+# that points at the right docs section.
+def _is_token_principal_unmapped(exc: pyodbc.Error) -> bool:
+    args = getattr(exc, "args", ()) or ()
+    sqlstate = str(args[0]) if args else ""
+    msg = str(args[1]) if len(args) > 1 else str(exc)
+    if sqlstate != "28000":
+        return False
+    lowered = msg.lower()
+    return "login failed for user '<token-identified principal>'" in lowered
+
+
 def _short_pyodbc_error(exc: pyodbc.Error) -> str:
     args = getattr(exc, "args", ()) or ()
     if len(args) >= 2:
@@ -140,6 +159,23 @@ class DedicatedPoolSqlClient:
             conn.timeout = self._cfg.sql.query_timeout
             return conn
         except pyodbc.Error as exc:
+            # ``<token-identified principal>`` rejection is *not* a
+            # token-mechanism problem — switching auth method will
+            # produce an identical error. Surface it directly with the
+            # contained-user hint, no retry.
+            if _is_token_principal_unmapped(exc):
+                raise _DedicatedPoolAuthError(
+                    f"AAD authentication failed: [{ 'token-struct (SQL_COPT_SS_ACCESS_TOKEN)' }] "
+                    f"{_short_pyodbc_error(exc)} — the AAD admin is configured on the SQL "
+                    f"server (the gateway accepted the token) but the service principal has "
+                    f"no contained AAD user in database '{self._database}'. Run, **connected "
+                    f"to {self._database} as the AAD admin** (not master): "
+                    f"CREATE USER [<sp-display-name>] FROM EXTERNAL PROVIDER; "
+                    f"ALTER ROLE db_datareader ADD MEMBER [<sp-display-name>]; "
+                    f"GRANT VIEW DATABASE STATE TO [<sp-display-name>]; "
+                    f"GRANT VIEW DEFINITION TO [<sp-display-name>]. "
+                    f"See user-guide §24 'Pre-flight checklist'."
+                ) from exc
             if not _is_aad_token_rejected(exc):
                 raise
             attempts.append(("token-struct (SQL_COPT_SS_ACCESS_TOKEN)", exc))
