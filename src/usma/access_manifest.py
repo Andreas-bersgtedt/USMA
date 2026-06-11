@@ -32,13 +32,21 @@ MANIFEST: tuple[ModuleAccess, ...] = (
         module="dedicated_pools",
         purpose="Inventory dedicated SQL pools and the SQL surface (tables, "
                 "indexes, procedures, functions, top queries, top consumed "
-                "tables/views).",
+                "tables/views). Supports both Synapse-workspace pools "
+                "(Microsoft.Synapse/workspaces/sqlPools) and the standalone "
+                "'Dedicated SQL pool (formerly SQL DW)' topology "
+                "(Microsoft.Sql/servers/databases with edition='DataWarehouse'); "
+                "see ADR-0009.",
         reads=(
-            "SynapseManagementClient.workspaces.get / sql_pools.list_by_workspace",
+            "SynapseManagementClient.workspaces.get / sql_pools.list_by_workspace "
+            "(workspace topology)",
+            "SqlManagementClient.servers.get / databases.list_by_server "
+            "(standalone topology — filtered to sku.tier='DataWarehouse')",
             "T-SQL: sys.objects, sys.sql_modules, sys.parameters, sys.tables, "
             "sys.indexes, sys.dm_pdw_nodes_db_partition_stats, "
             "sys.dm_pdw_exec_requests, sys.dm_pdw_exec_sessions, "
-            "INFORMATION_SCHEMA.TABLES (read-only DMV / catalog scans)",
+            "INFORMATION_SCHEMA.TABLES (read-only DMV / catalog scans; "
+            "identical MPP engine on both topologies)",
         ),
         azure_rbac=("Reader (workspace or RG)",),
         synapse_rbac=(),
@@ -250,6 +258,7 @@ NON_EGRESS: tuple[str, ...] = (
     "No outbound network traffic except to documented Azure endpoints "
     "(management.azure.com, <workspace>.dev.azuresynapse.net, "
     "<workspace>.sql.azuresynapse.net, <workspace>-ondemand.sql.azuresynapse.net, "
+    "<server>.database.windows.net (standalone Dedicated SQL pool topology), "
     "<storage>.dfs/blob.core.windows.net, management.azure.com Cost Management).",
     "The web control plane is loopback-only by default; --i-know-this-is-not-auth "
     "is required to bind a non-loopback host.",

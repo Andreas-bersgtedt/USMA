@@ -35,6 +35,7 @@ import databricks from "../../../docs/user-guide/21-databricks.md?raw";
 import databricksAws from "../../../docs/user-guide/21a-databricks-aws.md?raw";
 import bigquery from "../../../docs/user-guide/22-bigquery.md?raw";
 import snowflake from "../../../docs/user-guide/23-snowflake.md?raw";
+import standaloneDedicatedSql from "../../../docs/user-guide/24-standalone-dedicated-sql.md?raw";
 import addingASource from "../../../docs/user-guide/99-adding-a-source.md?raw";
 import glossary from "../../../docs/user-guide/glossary.md?raw";
 import repoContributing from "../../../CONTRIBUTING.md?raw";
@@ -48,11 +49,13 @@ import adr0004 from "../../../docs/adr/0004-package-rename.md?raw";
 import adr0005 from "../../../docs/adr/0005-multi-cloud-databricks.md?raw";
 import adr0007 from "../../../docs/adr/0007-snowflake-auth.md?raw";
 import adr0008 from "../../../docs/adr/0008-snowflake-multi-cloud.md?raw";
+import adr0009 from "../../../docs/adr/0009-standalone-dedicated-sql.md?raw";
 import adrReadme from "../../../docs/adr/README.md?raw";
 import repoCodeOfConduct from "../../../CODE_OF_CONDUCT.md?raw";
 import archOverview from "../../../docs/architecture/overview.md?raw";
 import archSources from "../../../docs/architecture/sources.md?raw";
 import archModules from "../../../docs/architecture/modules.md?raw";
+import archStandaloneDedicatedSql from "../../../docs/architecture/standalone-dedicated-sql.md?raw";
 
 export type ChapterSection =
   | "Orientation"
@@ -251,6 +254,13 @@ export const CHAPTERS: Chapter[] = [
     body: snowflake,
   },
   {
+    slug: "24-standalone-dedicated-sql",
+    title: "24. Standalone Dedicated SQL pool (formerly SQL DW)",
+    short: "Standalone DWU",
+    section: "Sources",
+    body: standaloneDedicatedSql,
+  },
+  {
     slug: "glossary",
     title: "Glossary — acronyms & abbreviations",
     short: "Glossary",
@@ -387,6 +397,14 @@ export const CHAPTERS: Chapter[] = [
     hidden: true,
   },
   {
+    slug: "0009-standalone-dedicated-sql",
+    title: "ADR-0009 — Standalone Dedicated SQL pool",
+    short: "ADR-0009",
+    section: "Reference",
+    body: adr0009,
+    hidden: true,
+  },
+  {
     slug: "adr-index",
     title: "ADR index",
     short: "ADR index",
@@ -424,6 +442,14 @@ export const CHAPTERS: Chapter[] = [
     short: "Architecture modules",
     section: "Reference",
     body: archModules,
+    hidden: true,
+  },
+  {
+    slug: "standalone-dedicated-sql",
+    title: "Architecture — standalone Dedicated SQL pool",
+    short: "Standalone DWU architecture",
+    section: "Reference",
+    body: archStandaloneDedicatedSql,
     hidden: true,
   },
 ];

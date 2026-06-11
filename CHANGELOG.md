@@ -6,6 +6,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Standalone Dedicated SQL pool (formerly SQL DW) support.** New
+  `SourceType.SYNAPSE_DEDICATED_SQL` source type points the
+  `dedicated_pools` module at a `Microsoft.Sql/servers/<server>/databases/<db>`
+  with `edition='DataWarehouse'` and **no** parent Synapse workspace,
+  fixing the `(ParentResourceNotFound) Failed to perform 'read' on
+  resource(s) of type 'workspaces/sqlPools'` error reported when a
+  client's pool is provisioned directly under
+  `Microsoft.Sql/servers`. The DMV surface, collectors, distribution
+  advisor, T-SQL gap rollup, and Fabric mapping rules are reused
+  unchanged — only ARM discovery (`SqlManagementClient.databases.list_by_server`
+  filtered to `sku.tier == 'DataWarehouse'`) and the endpoint FQDN
+  (`<server>.database.windows.net`) differ. See
+  [ADR-0009](docs/adr/0009-standalone-dedicated-sql.md) and the
+  architecture write-up at
+  [docs/architecture/standalone-dedicated-sql.md](docs/architecture/standalone-dedicated-sql.md).
+  - **Backend:** `SynapseDedicatedSqlProvider` (discover / validate /
+    `make_clients`); `SqlServerArmClient` with DWU-tier filtering and
+    a `sql_endpoint` returning `<server>.database.windows.net`;
+    `DedicatedPoolsAnalyzer` refactored around a
+    `DedicatedPoolArmClient` Protocol with scope-based selection; new
+    `azure-mgmt-sql>=3.0` dependency; doctor + `MODULE_SPECS`
+    predicates widened.
+  - **Web SPA + API:** `POST /api/config/discover-sql-servers`
+    endpoint; Configuration page **Dedicated SQL pool** radio with
+    server dropdown, optional per-database filter, and live
+    validation; `synapse_dedicated_sql` added to the `SourceTypeId`
+    union, `apiDiscoverSqlServers` loader, and Estate Overview label
+    map.
+  - **CLI:** `SMA_SOURCE_TYPE=synapse_dedicated_sql` reuses
+    `SYNAPSE_RESOURCE_GROUP` (the SQL server's RG) and
+    `SYNAPSE_WORKSPACE_NAME` (the SQL server's name);
+    `SYNAPSE_DEDICATED_POOL` optionally narrows the scan to a single
+    database. `--scope synapse_dedicated_sql:<server>` works on
+    `analyze-dedicated-pools` and `analyze-all`.
+  - **Docs:** new
+    [docs/user-guide/24-standalone-dedicated-sql.md](docs/user-guide/24-standalone-dedicated-sql.md);
+    QUICKSTART preamble, §1 dedicated_pools callout, and module
+    table updated; `sma access-report` now lists the standalone
+    topology under the `dedicated_pools` entry and adds
+    `<server>.database.windows.net` to the documented egress
+    allow-list.
+  - **Tests:** 28 new unit + integration tests
+    ([tests/sources/synapse_dedicated_sql/](tests/sources/synapse_dedicated_sql),
+    [tests/test_dedicated_pools_sql_server_arm.py](tests/test_dedicated_pools_sql_server_arm.py),
+    [tests/test_dedicated_pools_analyzer_dispatch.py](tests/test_dedicated_pools_analyzer_dispatch.py),
+    [tests/web/test_source_type_dedicated_sql.py](tests/web/test_source_type_dedicated_sql.py)).
+
+### Known limits (alpha)
+
+- Cost attribution still gates on the `Microsoft.Synapse/workspaces/.../sqlPools`
+  resource-id prefix; standalone DWU rows land in the `other` bucket
+  for now.
+- `monitoring` does not yet pull DWU capacity metrics for the
+  standalone topology; the equivalent
+  `Microsoft.Sql/servers/.../databases` metric wiring is a follow-up.
+
 ## [5.3.3] - 2026-06-01
 
 ### Fixed

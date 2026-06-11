@@ -24,10 +24,17 @@ A **module-based** walkthrough of the Unified Solution Migration Analyzer (USMA)
 > — Snowflake uses its built-in **OAuth refresh-token** integration
 > (see [ADR-0007](docs/adr/0007-snowflake-auth.md)), so the AAD
 > fields are likewise skipped.
+> For analyzing a **standalone Dedicated SQL pool (formerly SQL DW)**
+> — a `Microsoft.Sql/servers/<server>/databases/<db>` with
+> `edition='DataWarehouse'` and **no** parent Synapse workspace — also
+> read [docs/user-guide/24-standalone-dedicated-sql.md](docs/user-guide/24-standalone-dedicated-sql.md)
+> and [ADR-0009](docs/adr/0009-standalone-dedicated-sql.md). It uses
+> the same Azure SP as Synapse but discovers via
+> `Microsoft.Sql/servers` and connects to `<server>.database.windows.net`.
 
 | # | Module | Source(s) | CLI command | Source |
 |---|---|---|---|---|
-| 1 | `dedicated_pools`  | Synapse | `sma analyze-dedicated-pools`  | [src/.../modules/dedicated_pools/](src/usma/modules/dedicated_pools) |
+| 1 | `dedicated_pools`  | Synapse + standalone DWU | `sma analyze-dedicated-pools`  | [src/.../modules/dedicated_pools/](src/usma/modules/dedicated_pools) |
 | 2 | `serverless_pools` | Synapse | `sma analyze-serverless-pools` | [src/.../modules/serverless_pools/](src/usma/modules/serverless_pools) |
 | 3 | `spark_pools`      | Synapse | `sma analyze-spark-pools`      | [src/.../modules/spark_pools/](src/usma/modules/spark_pools) |
 | 4 | `pipelines`        | Synapse + ADF | `sma analyze-pipelines`        | [src/.../modules/pipelines/](src/usma/modules/pipelines) |
@@ -605,6 +612,15 @@ All suites pass without any Azure credentials configured: config loading, report
 ## Module 1 — `dedicated_pools`
 
 Inventories every dedicated SQL pool in the configured Synapse workspace and collects schemas, tables (with distribution/partitioning/storage), indexes, a usage snapshot, security principals, workload-management groups, and T-SQL code objects. The **v2** layer adds a column-level collation audit, materialized-view inventory, statistics-freshness report, column-level stats, a distribution-key advisor (skew + filter-selectivity heuristics), and a per-object T-SQL surface gap rollup linked back to each finding via a stable `code_object_id`.
+
+> **Both topologies supported (v5.4).** Set `SMA_SOURCE_TYPE=synapse_dedicated_sql`
+> to point this module at a **standalone Dedicated SQL pool (formerly SQL DW)**
+> — a `Microsoft.Sql/servers/<server>/databases/<db>` with `edition='DataWarehouse'`
+> and no parent Synapse workspace. The DMV surface, collectors, and analyzer
+> rules are identical to the workspace-pool path; only ARM discovery and the
+> endpoint FQDN (`<server>.database.windows.net`) differ. See
+> [docs/user-guide/24-standalone-dedicated-sql.md](docs/user-guide/24-standalone-dedicated-sql.md)
+> and [ADR-0009](docs/adr/0009-standalone-dedicated-sql.md).
 
 ### 1.1 What it captures
 
