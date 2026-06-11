@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.4.0] - 2026-06-11
+
 ### Added
 - **Standalone Dedicated SQL pool (formerly SQL DW) support.** New
   `SourceType.SYNAPSE_DEDICATED_SQL` source type points the
