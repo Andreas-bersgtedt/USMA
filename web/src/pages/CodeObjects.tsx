@@ -128,12 +128,26 @@ export default function CodeObjects() {
 
   if (loading) return <div className="empty">Loading…</div>;
   const serverlessTopQueries = serverless?.top_queries ?? [];
-  const hasDedicated = !!data && rows.length > 0;
+  // The page renders four dedicated-pool sections: code objects + T-SQL
+  // gaps, top queries, top consumed objects, and the workload capture
+  // stats banner. Any one of these is enough to make the page useful —
+  // a pool that has no procs/views/functions (common on raw-staging
+  // DWUs) can still have hundreds of top_queries worth surfacing.
+  const hasDedicated =
+    !!data &&
+    data.pools.some(
+      (p) =>
+        (p.code_objects?.length ?? 0) > 0 ||
+        (p.top_queries?.length ?? 0) > 0 ||
+        (p.top_consumed_objects?.length ?? 0) > 0 ||
+        p.workload_capture_stats != null,
+    );
   if (!hasDedicated && serverlessTopQueries.length === 0)
     return (
       <Empty>
-        No code objects or serverless query history collected. Run the{" "}
-        <code>dedicated_pools</code> or <code>serverless_pools</code> module.
+        No code objects, query history, or serverless workload collected.
+        Run the <code>dedicated_pools</code> or{" "}
+        <code>serverless_pools</code> module.
       </Empty>
     );
 

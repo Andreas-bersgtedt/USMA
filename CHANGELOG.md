@@ -163,6 +163,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     predicate.
 
 ### Fixed
+- **SQL Surface page renders for pools without code objects.**
+  The SPA's `<CodeObjects>` empty-state check counted only
+  dedicated-pool `code_objects`, so a pool with 0 procedures /
+  views / functions but plenty of `top_queries` /
+  `top_consumed_objects` / `workload_capture_stats` (typical of
+  raw-staging DWUs and the customer's `testdedicatedpool`)
+  short-circuited to *"No code objects or serverless query
+  history collected"* before the Top Queries / Top Consumed
+  Objects / Workload Capture Stats sections had a chance to
+  render. `hasDedicated` now also accepts those alternative
+  signals; the Code Objects table is still conditionally hidden
+  when its row set is empty so the page surface stays tidy.
 
 - **Run page** now hides the eleven module checkboxes that do not
   apply to a standalone Dedicated SQL pool scope
