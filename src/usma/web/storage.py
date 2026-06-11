@@ -34,7 +34,7 @@ _ID_RE = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{8}$")
 # filesystem-safe lowercase id produced by ``jobs._scope_slug``. Anchored
 # so a stray ``..`` segment cannot match.
 _SCOPE_DIR_RE = re.compile(
-    r"^(?P<source>synapse_workspace|adf|databricks|sap_bw)__(?P<slug>[a-z0-9][a-z0-9_-]*)$"
+    r"^(?P<source>synapse_workspace|synapse_dedicated_sql|adf|databricks|sap_bw)__(?P<slug>[a-z0-9][a-z0-9_-]*)$"
 )
 
 # Hard cap on the number of progress events persisted per run. Beyond this we

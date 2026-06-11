@@ -408,7 +408,7 @@ const API_HEADERS: HeadersInit = { "Content-Type": "application/json", "X-SMA-AP
  * know the analyzer's internal source-provider machinery.
  */
 export type ScopeRef = {
-  source_type: "synapse_workspace" | "adf" | "databricks" | "bigquery" | "snowflake" | "sap_bw";
+  source_type: "synapse_workspace" | "synapse_dedicated_sql" | "adf" | "databricks" | "bigquery" | "snowflake" | "sap_bw";
   id: string;
   display_name: string;
   subscription_id?: string | null;

@@ -164,8 +164,12 @@ MODULE_SPECS: dict[str, ModuleSpec] = {
         # (consumes ``databricks_workflows.json`` via the new rule);
         # Phase 5 Slice 5-C adds BIGQUERY (consumes ``bigquery_workloads.json``);
         # Phase 7 Slice 7-D adds SNOWFLAKE (consumes ``snowflake_workloads.json``).
+        # Phase 6 Slice D (ADR-0009) adds SYNAPSE_DEDICATED_SQL — the
+        # standalone topology emits the same ``dedicated_pools.json`` shape
+        # as workspace-attached pools, so the existing rules apply unchanged.
         supports=frozenset({
             SourceType.SYNAPSE_WORKSPACE,
+            SourceType.SYNAPSE_DEDICATED_SQL,
             SourceType.ADF,
             SourceType.DATABRICKS,
             SourceType.BIGQUERY,
