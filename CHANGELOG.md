@@ -96,6 +96,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SYNAPSE_DEDICATED_POOL` reuse, AAD audience sharing, firewall
   surprises, and the AAD-admin gap as the #1 setup failure mode.
 
+### Fixed
+
+- **Run page** now hides the eleven module checkboxes that do not
+  apply to a standalone Dedicated SQL pool scope
+  (`synapse_dedicated_sql`). Only `dedicated_pools` is selectable;
+  `fabric_mapping` runs implicitly as before. Previously the Run
+  page fell through to a default that showed every module, letting
+  users tick analyzers (`serverless_pools`, `spark_pools`,
+  `pipelines`, `storage`, `monitoring`, `governance`, `security`,
+  `cost`, `fabric_validation`, plus the cross-platform Databricks /
+  BigQuery / Snowflake collectors) that have no Synapse workspace
+  to read from.
+- **Dedicated pool DMV connection** falls back to
+  `Authentication=ActiveDirectoryServicePrincipal` with `UID` /
+  `PWD` from the configured service principal when the AAD
+  `SQL_COPT_SS_ACCESS_TOKEN` handshake is rejected with the
+  canonical `[28000] Login failed for user ''. (18456)` +
+  `Invalid connection string attribute` pair. This pattern is
+  observed on standalone Dedicated SQL pools reached via
+  `*.database.windows.net` where the gateway refuses the token
+  struct that the same code path accepts on
+  `*.sql.azuresynapse.net`. The fallback is the documented
+  Microsoft path for ODBC Driver 17.4+/18.x service-principal auth
+  against Azure SQL.
+
 ## [5.3.3] - 2026-06-01
 
 ### Fixed

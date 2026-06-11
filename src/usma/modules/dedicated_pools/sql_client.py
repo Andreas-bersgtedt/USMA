@@ -28,6 +28,32 @@ def _load_query(name: str) -> str:
     return (_QUERIES_DIR / f"{name}.sql").read_text(encoding="utf-8")
 
 
+# SQLState 28000 + "Login failed for user ''" + "Invalid connection string
+# attribute" is the canonical signature of the AAD token-struct being
+# rejected by the SQL gateway (seen on standalone Dedicated SQL pools via
+# ``*.database.windows.net``). When we see it, retry with the
+# connection-string SP auth method which is the documented Microsoft
+# fallback for ODBC Driver 17.4+/18.x.
+def _is_aad_token_rejected(exc: pyodbc.Error) -> bool:
+    args = getattr(exc, "args", ()) or ()
+    sqlstate = str(args[0]) if args else ""
+    msg = str(args[1]) if len(args) > 1 else str(exc)
+    if sqlstate not in {"28000", "08001", "08S01", "HY000"}:
+        return False
+    lowered = msg.lower()
+    return (
+        "login failed for user ''" in lowered
+        or "invalid connection string attribute" in lowered
+    )
+
+
+def _short_pyodbc_error(exc: pyodbc.Error) -> str:
+    args = getattr(exc, "args", ()) or ()
+    if len(args) >= 2:
+        return f"{args[0]}: {str(args[1])[:160]}"
+    return str(exc)[:160]
+
+
 class DedicatedPoolSqlClient:
     """Connects to a single dedicated SQL pool using a service-principal access token.
 
@@ -57,6 +83,22 @@ class DedicatedPoolSqlClient:
             f"Connection Timeout={sql.login_timeout};"
         )
 
+    def _sp_direct_connection_string(self) -> str:
+        # ODBC Driver 17.4+ / 18.x can mint the AAD token internally
+        # when given the SP credentials directly; used as a fallback when
+        # the SQL_COPT_SS_ACCESS_TOKEN handshake is rejected (some
+        # Azure SQL / standalone DWU gateways return "Login failed for
+        # user ''" + "Invalid connection string attribute" when the token
+        # struct isn't recognised — most often seen on standalone
+        # Dedicated SQL pools accessed via *.database.windows.net).
+        azure = self._cfg.azure
+        return (
+            self._connection_string()
+            + "Authentication=ActiveDirectoryServicePrincipal;"
+            + f"UID={{{azure.client_id}}};"
+            + f"PWD={{{azure.client_secret}}};"
+        )
+
     def _token_struct(self) -> bytes:
         token = get_sql_access_token(self._cfg.azure)
         encoded = token.encode("utf-16-le")
@@ -64,8 +106,18 @@ class DedicatedPoolSqlClient:
 
     def _open(self) -> pyodbc.Connection:
         log.debug("Connecting to %s / %s", self._server, self._database)
-        attrs = {_SQL_COPT_SS_ACCESS_TOKEN: self._token_struct()}
-        conn = pyodbc.connect(self._connection_string(), attrs_before=attrs)
+        try:
+            attrs = {_SQL_COPT_SS_ACCESS_TOKEN: self._token_struct()}
+            conn = pyodbc.connect(self._connection_string(), attrs_before=attrs)
+        except pyodbc.Error as exc:
+            if not _is_aad_token_rejected(exc):
+                raise
+            log.warning(
+                "AAD token-struct auth rejected for %s/%s (%s); retrying with "
+                "Authentication=ActiveDirectoryServicePrincipal",
+                self._server, self._database, _short_pyodbc_error(exc),
+            )
+            conn = pyodbc.connect(self._sp_direct_connection_string())
         conn.timeout = self._cfg.sql.query_timeout
         return conn
 
