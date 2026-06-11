@@ -276,6 +276,7 @@ def _apply_scope_flags(cfg: AppConfig, specs: tuple[str, ...]) -> AppConfig:
             continue
         provider_segment = {
             SourceType.SYNAPSE_WORKSPACE: "Microsoft.Synapse/workspaces",
+            SourceType.SYNAPSE_DEDICATED_SQL: "Microsoft.Sql/servers",
             SourceType.ADF: "Microsoft.DataFactory/factories",
             SourceType.DATABRICKS: "Microsoft.Databricks/workspaces",
             SourceType.SAP_BW: "ext.SAP/BW",
@@ -284,12 +285,16 @@ def _apply_scope_flags(cfg: AppConfig, specs: tuple[str, ...]) -> AppConfig:
             f"/subscriptions/{sub_id}/resourceGroups/{rg}"
             f"/providers/{provider_segment}/{display}"
         )
+        extras: dict[str, str] = {}
+        if source_type == SourceType.SYNAPSE_DEDICATED_SQL:
+            extras["sql_server_fqdn"] = f"{display}.database.windows.net"
         scopes.append(SourceDescriptor(
             type=source_type,
             id=arm_id,
             display_name=display,
             subscription_id=sub_id,
             resource_group=rg,
+            extras=extras,
         ))
     return dataclasses.replace(cfg, scopes=tuple(scopes))
 
@@ -322,7 +327,17 @@ def _resolve_effort_card(card_path: Path | None) -> tuple[RateCard, str]:
               help="Report formats to emit.")
 @click.pass_context
 def analyze_dedicated_pools(ctx: click.Context, formats: tuple[str, ...]) -> None:
-    """Inventory and analyze dedicated SQL pools in the configured Synapse workspace."""
+    """Inventory and analyze dedicated SQL pools.
+
+    Supports both:
+
+    * **Synapse-workspace pools** (``Microsoft.Synapse/workspaces/<ws>/sqlPools``) —
+      the default when ``SMA_SOURCE_TYPE`` is unset or ``synapse_workspace``.
+    * **Standalone Dedicated SQL pools (formerly SQL DW)**
+      (``Microsoft.Sql/servers/<server>/databases/<db>`` with
+      ``edition='DataWarehouse'``) — when ``SMA_SOURCE_TYPE=synapse_dedicated_sql``
+      or a ``--scope synapse_dedicated_sql:<server>`` flag is present.
+    """
     cfg = ctx.obj["config"]
     result = DedicatedPoolsAnalyzer(cfg).run()
     paths = write_dedicated_reports(result, cfg.output_dir, formats=[f.lower() for f in formats])

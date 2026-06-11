@@ -67,6 +67,14 @@ def _spec(
 MODULE_SPECS: dict[str, ModuleSpec] = {
     "dedicated_pools": _spec(
         "dedicated_pools",
+        # Both Synapse-workspace pools and standalone Dedicated SQL
+        # pools (formerly SQL DW) share the same data-plane analyzer
+        # (DMVs, distribution advisor, T-SQL gap rollup); only ARM
+        # discovery differs (see ADR-0009).
+        supports=frozenset({
+            SourceType.SYNAPSE_WORKSPACE,
+            SourceType.SYNAPSE_DEDICATED_SQL,
+        }),
         description="Dedicated SQL pool inventory and Fabric readiness.",
     ),
     "serverless_pools": _spec(
@@ -87,10 +95,29 @@ MODULE_SPECS: dict[str, ModuleSpec] = {
     ),
     "monitoring": _spec(
         "monitoring",
+        # Both Synapse-workspace pools and standalone Dedicated SQL
+        # pools (formerly SQL DW) expose DWU metrics via Azure Monitor.
+        # The analyzer dispatches to the correct ARM listing path and
+        # rewrites snake_case standalone metric names to the workspace
+        # PascalCase set (see ADR-0009 + monitor_client.STANDALONE_TO_WORKSPACE_METRIC).
+        supports=frozenset({
+            SourceType.SYNAPSE_WORKSPACE,
+            SourceType.SYNAPSE_DEDICATED_SQL,
+        }),
         description="Monitor/Log Analytics signals and run-history rollups.",
     ),
     "storage": _spec(
         "storage",
+        # Standalone Dedicated SQL pool (formerly SQL DW) supports the
+        # per-pool storage DMV path (reserved / data / index space) so
+        # the Dashboard Storage section renders for standalone scopes;
+        # workspace ADLS / blob inventory is skipped automatically by
+        # the analyzer (no parent workspace = no accounts to list).
+        # See ADR-0009.
+        supports=frozenset({
+            SourceType.SYNAPSE_WORKSPACE,
+            SourceType.SYNAPSE_DEDICATED_SQL,
+        }),
         description="Linked storage accounts and access patterns.",
     ),
     "governance": _spec(
@@ -156,8 +183,12 @@ MODULE_SPECS: dict[str, ModuleSpec] = {
         # (consumes ``databricks_workflows.json`` via the new rule);
         # Phase 5 Slice 5-C adds BIGQUERY (consumes ``bigquery_workloads.json``);
         # Phase 7 Slice 7-D adds SNOWFLAKE (consumes ``snowflake_workloads.json``).
+        # Phase 6 Slice D (ADR-0009) adds SYNAPSE_DEDICATED_SQL — the
+        # standalone topology emits the same ``dedicated_pools.json`` shape
+        # as workspace-attached pools, so the existing rules apply unchanged.
         supports=frozenset({
             SourceType.SYNAPSE_WORKSPACE,
+            SourceType.SYNAPSE_DEDICATED_SQL,
             SourceType.ADF,
             SourceType.DATABRICKS,
             SourceType.BIGQUERY,

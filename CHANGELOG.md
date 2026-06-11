@@ -6,6 +6,224 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.4.0] - 2026-06-11
+
+### Added
+- **Standalone Dedicated SQL pool (formerly SQL DW) support.** New
+  `SourceType.SYNAPSE_DEDICATED_SQL` source type points the
+  `dedicated_pools` module at a `Microsoft.Sql/servers/<server>/databases/<db>`
+  with `edition='DataWarehouse'` and **no** parent Synapse workspace,
+  fixing the `(ParentResourceNotFound) Failed to perform 'read' on
+  resource(s) of type 'workspaces/sqlPools'` error reported when a
+  client's pool is provisioned directly under
+  `Microsoft.Sql/servers`. The DMV surface, collectors, distribution
+  advisor, T-SQL gap rollup, and Fabric mapping rules are reused
+  unchanged — only ARM discovery (`SqlManagementClient.databases.list_by_server`
+  filtered to `sku.tier == 'DataWarehouse'`) and the endpoint FQDN
+  (`<server>.database.windows.net`) differ. See
+  [ADR-0009](docs/adr/0009-standalone-dedicated-sql.md) and the
+  architecture write-up at
+  [docs/architecture/standalone-dedicated-sql.md](docs/architecture/standalone-dedicated-sql.md).
+  - **Backend:** `SynapseDedicatedSqlProvider` (discover / validate /
+    `make_clients`); `SqlServerArmClient` with DWU-tier filtering and
+    a `sql_endpoint` returning `<server>.database.windows.net`;
+    `DedicatedPoolsAnalyzer` refactored around a
+    `DedicatedPoolArmClient` Protocol with scope-based selection; new
+    `azure-mgmt-sql>=3.0` dependency; doctor + `MODULE_SPECS`
+    predicates widened.
+  - **Web SPA + API:** `POST /api/config/discover-sql-servers`
+    endpoint; Configuration page **Dedicated SQL pool** radio with
+    server dropdown, optional per-database filter, and live
+    validation; `synapse_dedicated_sql` added to the `SourceTypeId`
+    union, `apiDiscoverSqlServers` loader, and Estate Overview label
+    map.
+  - **CLI:** `SMA_SOURCE_TYPE=synapse_dedicated_sql` reuses
+    `SYNAPSE_RESOURCE_GROUP` (the SQL server's RG) and
+    `SYNAPSE_WORKSPACE_NAME` (the SQL server's name);
+    `SYNAPSE_DEDICATED_POOL` optionally narrows the scan to a single
+    database. `--scope synapse_dedicated_sql:<server>` works on
+    `analyze-dedicated-pools` and `analyze-all`.
+  - **Docs:** new
+    [docs/user-guide/24-standalone-dedicated-sql.md](docs/user-guide/24-standalone-dedicated-sql.md);
+    QUICKSTART preamble, §1 dedicated_pools callout, and module
+    table updated; `sma access-report` now lists the standalone
+    topology under the `dedicated_pools` entry and adds
+    `<server>.database.windows.net` to the documented egress
+    allow-list.
+  - **Tests:** 28 new unit + integration tests
+    ([tests/sources/synapse_dedicated_sql/](tests/sources/synapse_dedicated_sql),
+    [tests/test_dedicated_pools_sql_server_arm.py](tests/test_dedicated_pools_sql_server_arm.py),
+    [tests/test_dedicated_pools_analyzer_dispatch.py](tests/test_dedicated_pools_analyzer_dispatch.py),
+    [tests/web/test_source_type_dedicated_sql.py](tests/web/test_source_type_dedicated_sql.py)).
+
+### Known limits (alpha)
+
+- Cost attribution still gates on the `Microsoft.Synapse/workspaces/.../sqlPools`
+  resource-id prefix; standalone DWU rows land in the `other` bucket
+  for now. (`monitoring` and `storage` ship in Slices F + G below.)
+
+### Slice D — Estate overview + Fabric mapping (this release)
+
+- `MODULE_SPECS["fabric_mapping"].supports` now includes
+  `SYNAPSE_DEDICATED_SQL`, so a standalone DWU scope automatically
+  gets the same `dedicated_pools.json` → `fabric_mapping.json`
+  pipeline as a workspace-attached pool. No rule changes needed —
+  the analyzer reads the artefact, not the source type.
+- `web/storage.py` `_SCOPE_DIR_RE` widened to accept
+  `synapse_dedicated_sql__<slug>` so multi-scope runs enumerate
+  per-scope artefacts correctly.
+- SPA: `ScopeRef.source_type` literal widened in
+  `web/src/api/loader.ts`; `SOURCE_TYPE_LABELS` /
+  `SOURCE_NOUN_LABELS` in `web/src/lib/labels.ts` gain
+  "Dedicated SQL pool (formerly SQL DW)" / "server";
+  `ScopeFilter` source-label map gains a "Dedicated SQL" chip.
+- 4 new guardrail tests in
+  [tests/test_dedicated_pools_slice_d.py](tests/test_dedicated_pools_slice_d.py):
+  fabric_mapping predicate, scope-dir regex (incl. traversal
+  rejection), Estate Overview cloud bucket = `azure`, and an
+  end-to-end run of `FabricMappingAnalyzer` over a hand-built
+  standalone `dedicated_pools.json` to prove the rules fire unchanged.
+
+### Slice E — End-to-end smoke runbook (this release)
+
+- New "End-to-end smoke runbook" section in
+  [docs/user-guide/24-standalone-dedicated-sql.md](docs/user-guide/24-standalone-dedicated-sql.md):
+  pre-flight RBAC + db-level grants + AAD-admin checklist, CLI
+  smoke commands, SPA walk-through, an 8-row verification table,
+  and a "Gotchas learned during development" section covering the
+  `master` database, SKU tier capitalisation, the
+  `SYNAPSE_DEDICATED_POOL` reuse, AAD audience sharing, firewall
+  surprises, and the AAD-admin gap as the #1 setup failure mode.
+- **Slice F — Standalone Dedicated SQL pool monitoring (DWU
+  utilization for Fabric capacity sizing).** The `monitoring`
+  module now collects Azure Monitor metrics for standalone DWU
+  pools so `fabric_mapping.cu_projection` can derive a Fabric SKU
+  recommendation from real DWU utilization (peak DWU × DWU→CU rate
+  + headroom), matching the workspace path exactly. Resolves the
+  client request *"I now want the DWU utilization so I can do
+  Fabric mappings"*.
+  - `MonitoringClient.list_standalone_dwu_resource_ids()` enumerates
+    DWU-tier databases on `Microsoft.Sql/servers/<server>` via
+    `SqlManagementClient.databases.list_by_server` filtered to
+    `sku.tier == 'DataWarehouse'`, honouring the optional
+    single-pool filter.
+  - `STANDALONE_DWU_POOL_METRICS` requests the snake_case metric
+    names exposed by the `Microsoft.Sql/servers/databases` provider
+    (`dwu_limit`, `dwu_used`, `dwu_consumption_percent`,
+    `active_queries`, `queued_queries`, `connection_successful`,
+    `connection_failed`, `blocked_by_firewall`,
+    `memory_usage_percent`, `cpu_percent`).
+  - `fetch_metrics(metric_name_map=...)` rewrites returned names
+    via `STANDALONE_TO_WORKSPACE_METRIC` so downstream consumers
+    (`dwu_hours`, `fabric_mapping.cu_projection`) key uniformly on
+    the workspace PascalCase set (`DWULimit`, `DWUUsedPercent`,
+    `Connections`, …) regardless of source topology.
+  - `MonitoringAnalyzer.run()` dispatches by
+    `cfg.primary_scope().type` — `SYNAPSE_DEDICATED_SQL` →
+    standalone listing + standalone metric set + alias map;
+    everything else → unchanged workspace path.
+  - `MODULE_SPECS["monitoring"].supports` widened to include
+    `SYNAPSE_DEDICATED_SQL`; SPA Run page whitelist now exposes
+    the **Monitoring** checkbox for standalone Dedicated SQL pool
+    scopes. The customer's existing scan output at
+    `dedicated_pools.json` now sits alongside a populated
+    `monitoring.json` that `fabric_mapping` consumes for capacity
+    projection.
+  - New `tests/test_monitoring_standalone_dwu.py` (7 cases): SKU
+    filter, single-pool filter, missing-id skip, name rewriting
+    with and without an alias map, end-to-end scope dispatch in
+    the analyzer, and the module-spec predicate.
+- **Slice G — Standalone Dedicated SQL pool storage (Dashboard
+  Storage section).** The `storage` module now runs for
+  `SYNAPSE_DEDICATED_SQL` scopes and produces the per-pool
+  reserved / data / index / unused space rows that the SPA
+  Dashboard's `<StorageSection>` consumes, fixing the gap where
+  the Dashboard rendered no Storage card for standalone Dedicated
+  SQL pool runs.
+  - `StorageAnalyzer.__init__` is now scope-aware: when
+    `cfg.primary_scope().type == SYNAPSE_DEDICATED_SQL`, the
+    workspace `StorageArmClient` (ADLS / blob account inventory)
+    is not constructed at all — there is no parent workspace, so
+    nothing to enumerate — and `run()` short-circuits to the
+    per-pool DMV path alone.
+  - Pool discovery flows through the unified
+    `DedicatedPoolArmClient` Protocol via
+    `_select_arm_client(cfg)` (same plumbing introduced in
+    Slice C), so `SqlServerArmClient.list_dedicated_pools()` +
+    `sql_endpoint()` are picked automatically. The existing
+    `pool_size.sql` DMV query runs unchanged against
+    `<server>.database.windows.net`.
+  - `MODULE_SPECS["storage"].supports` widened to include
+    `SYNAPSE_DEDICATED_SQL`; SPA Run page whitelist now exposes
+    the **Storage** checkbox for standalone scopes.
+  - New `tests/test_storage_standalone_dwu.py` (3 cases): the
+    standalone path skips workspace inventory, the workspace
+    path still wires up both ARM clients, and the module-spec
+    predicate.
+
+### Fixed
+- **SQL Surface page renders for pools without code objects.**
+  The SPA's `<CodeObjects>` empty-state check counted only
+  dedicated-pool `code_objects`, so a pool with 0 procedures /
+  views / functions but plenty of `top_queries` /
+  `top_consumed_objects` / `workload_capture_stats` (typical of
+  raw-staging DWUs and the customer's `exampledwpool`)
+  short-circuited to *"No code objects or serverless query
+  history collected"* before the Top Queries / Top Consumed
+  Objects / Workload Capture Stats sections had a chance to
+  render. `hasDedicated` now also accepts those alternative
+  signals; the Code Objects table is still conditionally hidden
+  when its row set is empty so the page surface stays tidy.
+
+- **Run page** now hides the eleven module checkboxes that do not
+  apply to a standalone Dedicated SQL pool scope
+  (`synapse_dedicated_sql`). Only `dedicated_pools` is selectable;
+  `fabric_mapping` runs implicitly as before. Previously the Run
+  page fell through to a default that showed every module, letting
+  users tick analyzers (`serverless_pools`, `spark_pools`,
+  `pipelines`, `storage`, `monitoring`, `governance`, `security`,
+  `cost`, `fabric_validation`, plus the cross-platform Databricks /
+  BigQuery / Snowflake collectors) that have no Synapse workspace
+  to read from.
+- **Dedicated pool DMV connection** falls back to
+  `Authentication=ActiveDirectoryServicePrincipal` with `UID` /
+  `PWD` from the configured service principal when the AAD
+  `SQL_COPT_SS_ACCESS_TOKEN` handshake is rejected with the
+  canonical `[28000] Login failed for user ''. (18456)` +
+  `Invalid connection string attribute` pair. This pattern is
+  observed on standalone Dedicated SQL pools reached via
+  `*.database.windows.net` where the gateway refuses the token
+  struct that the same code path accepts on
+  `*.sql.azuresynapse.net`. The fallback is the documented
+  Microsoft path for ODBC Driver 17.4+/18.x service-principal auth
+  against Azure SQL.
+- **Dedicated pool DMV connection — ODBC value quoting + aggregated
+  error.** The SP-direct fallback above now properly escapes any
+  `}` inside the service-principal secret (doubling it to `}}` per
+  the ODBC connection-string grammar), so secrets that happen to
+  contain `}` no longer corrupt the connection string into the
+  same `Invalid connection string attribute` rejection we were
+  trying to recover from. When both AAD paths fail, the analyzer
+  now raises an aggregated `_DedicatedPoolAuthError` listing
+  every attempt with its labelled error text — and when both
+  attempts report `Login failed for user ''`, the message appends
+  a pointer to "user-guide §24 'AAD admin on the SQL server'"
+  because the missing server-level Azure AD admin is the
+  #1 setup failure mode for standalone DWU.
+- **Dedicated pool DMV connection — recognise the
+  `<token-identified principal>` rejection.** This 28000 / 18456
+  signature means the AAD admin **is** configured (the gateway
+  accepted the token) but the service principal has no contained
+  AAD user in the target database. Retrying with a different auth
+  mechanism produces an identical error, so we now surface the
+  failure immediately (no pointless retry) with a targeted hint:
+  `CREATE USER [<sp-display-name>] FROM EXTERNAL PROVIDER;
+  ALTER ROLE db_datareader ADD MEMBER [<sp-display-name>];
+  GRANT VIEW DATABASE STATE TO [<sp-display-name>];
+  GRANT VIEW DEFINITION TO [<sp-display-name>]` — connected to
+  the database (not master) as the AAD admin. See user-guide §24
+  "Pre-flight checklist".
+
 ## [5.3.3] - 2026-06-01
 
 ### Fixed

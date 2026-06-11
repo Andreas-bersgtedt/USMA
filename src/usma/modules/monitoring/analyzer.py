@@ -8,12 +8,15 @@ from datetime import datetime, timezone
 
 from ...config import AppConfig
 from ...progress import NullProgress, ProgressReporter
+from ...sources import SourceType
 from . import dwu_hours
 from .models import DwuDayStat, MonitoringAnalysis
 from .monitor_client import (
     DEFAULT_AGGREGATION,
     DEFAULT_DEDICATED_POOL_METRICS,
     DEFAULT_INTERVAL,
+    STANDALONE_DWU_POOL_METRICS,
+    STANDALONE_TO_WORKSPACE_METRIC,
     MonitoringClient,
     build_series,
     default_window,
@@ -56,8 +59,26 @@ class MonitoringAnalyzer:
             interval=interval,
         )
 
+        # Pick discovery path + metric set + name normalization based on the
+        # configured scope. Standalone Dedicated SQL pools live under
+        # ``Microsoft.Sql/servers/databases`` and expose snake_case metric
+        # names (``dwu_consumption_percent``, ``dwu_limit``, ...). We
+        # rewrite returned names to the workspace-style PascalCase set so
+        # downstream consumers (``dwu_hours``,
+        # ``fabric_mapping.cu_projection``) work uniformly. See ADR-0009.
+        scope = self._cfg.primary_scope()
+        is_standalone = scope is not None and scope.type == SourceType.SYNAPSE_DEDICATED_SQL
+        if is_standalone:
+            list_fn = self._client.list_standalone_dwu_resource_ids
+            metrics_set = STANDALONE_DWU_POOL_METRICS
+            metric_name_map: dict[str, str] | None = STANDALONE_TO_WORKSPACE_METRIC
+        else:
+            list_fn = self._client.list_dedicated_pool_resource_ids
+            metrics_set = DEFAULT_DEDICATED_POOL_METRICS
+            metric_name_map = None
+
         try:
-            pools = self._client.list_dedicated_pool_resource_ids()
+            pools = list_fn()
         except Exception as exc:  # noqa: BLE001
             log.warning("Failed to list dedicated pools: %s", exc)
             result.errors.append(f"list_dedicated_pools: {exc}")
@@ -72,11 +93,12 @@ class MonitoringAnalyzer:
             try:
                 metrics = self._client.fetch_metrics(
                     resource_id,
-                    DEFAULT_DEDICATED_POOL_METRICS,
+                    metrics_set,
                     start,
                     end,
                     interval=interval,
                     aggregation=aggregation,
+                    metric_name_map=metric_name_map,
                 )
                 return pool_name, resource_id, metrics, None
             except Exception as exc:  # noqa: BLE001

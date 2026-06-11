@@ -77,6 +77,7 @@ const STATE_LABELS: Record<string, string> = {
  */
 const SOURCE_TYPE_LABELS: Record<string, string> = {
   synapse_workspace: "Synapse workspace",
+  synapse_dedicated_sql: "Dedicated SQL pool (formerly SQL DW)",
   adf: "Azure Data Factory",
   databricks: "Databricks workspace",
   sap_bw: "SAP BW system",
@@ -89,6 +90,7 @@ const SOURCE_TYPE_LABELS: Record<string, string> = {
  */
 const SOURCE_NOUN_LABELS: Record<string, string> = {
   synapse_workspace: "workspace",
+  synapse_dedicated_sql: "server",
   adf: "factory",
   databricks: "workspace",
   sap_bw: "system",

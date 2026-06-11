@@ -24,6 +24,7 @@ const STORAGE_PREFIX = "sma:scopeFilter:";
 
 const SOURCE_LABELS: Record<ScopeRef["source_type"], string> = {
   synapse_workspace: "Synapse",
+  synapse_dedicated_sql: "Dedicated SQL",
   adf: "ADF",
   databricks: "Databricks",
   bigquery: "BigQuery",

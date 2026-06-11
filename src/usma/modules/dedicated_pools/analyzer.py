@@ -5,9 +5,11 @@ import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from typing import Iterator, Protocol
 
 from ...config import AppConfig
 from ...progress import NullProgress, ProgressReporter
+from ...sources import SourceType
 from .arm_client import SynapseArmClient
 from . import distribution_advisor, query_pattern_extractor, tsql_surface_gap
 from .collectors import (
@@ -25,10 +27,33 @@ from .collectors import (
     collect_usage,
     collect_workload_groups,
 )
-from .models import DistributionCandidate, PoolAnalysis, WorkspaceAnalysis
+from .models import DistributionCandidate, PoolAnalysis, PoolInventory, WorkspaceAnalysis
 from .sql_client import DedicatedPoolSqlClient
+from .sql_server_arm_client import SqlServerArmClient
 
 log = logging.getLogger(__name__)
+
+
+class DedicatedPoolArmClient(Protocol):
+    """Minimal interface :class:`DedicatedPoolsAnalyzer` needs from an
+    ARM client. Both :class:`SynapseArmClient` (workspace-bound) and
+    :class:`SqlServerArmClient` (standalone DWU) implement it.
+    """
+
+    def list_dedicated_pools(self) -> Iterator[PoolInventory]: ...
+    def sql_endpoint(self) -> str: ...
+
+
+def _select_arm_client(cfg: AppConfig) -> DedicatedPoolArmClient:
+    """Return the ARM client that matches the configured scope type.
+
+    Defaults to :class:`SynapseArmClient` for backwards compatibility
+    when no scope is set or the scope is the legacy Synapse workspace.
+    """
+    scope = cfg.primary_scope()
+    if scope is not None and scope.type == SourceType.SYNAPSE_DEDICATED_SQL:
+        return SqlServerArmClient(cfg.azure)
+    return SynapseArmClient(cfg.azure)
 
 # Pool states for which the dedicated SQL endpoint will reject AAD logins.
 # Anything other than "Online" means DMV collection cannot run; we skip the
@@ -58,9 +83,16 @@ class DedicatedPoolsAnalyzer:
         cfg: AppConfig,
         *,
         progress: ProgressReporter | None = None,
+        arm_client: DedicatedPoolArmClient | None = None,
     ) -> None:
         self._cfg = cfg
-        self._arm = SynapseArmClient(cfg.azure)
+        # ``arm_client`` lets callers (CLI / tests) inject a specific
+        # implementation. When omitted we auto-select based on the
+        # configured scope type so legacy ``DedicatedPoolsAnalyzer(cfg)``
+        # callers keep working for Synapse-workspace pools and gain
+        # standalone DWU support transparently when the scope is
+        # ``SYNAPSE_DEDICATED_SQL``. See ADR-0009.
+        self._arm: DedicatedPoolArmClient = arm_client or _select_arm_client(cfg)
         self._progress = progress or NullProgress()
 
     def run(self) -> WorkspaceAnalysis:
@@ -71,7 +103,7 @@ class DedicatedPoolsAnalyzer:
             generated_at=datetime.now(timezone.utc),
         )
 
-        server = self._arm.workspace_sql_endpoint()
+        server = self._arm.sql_endpoint()
         inventories = list(self._arm.list_dedicated_pools())
         if not inventories:
             self._progress.start(0, label="no pools")

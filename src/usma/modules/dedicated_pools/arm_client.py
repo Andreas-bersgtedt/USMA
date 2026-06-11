@@ -50,3 +50,8 @@ class SynapseArmClient:
     def workspace_sql_endpoint(self) -> str:
         """Return the dedicated-SQL endpoint FQDN for the workspace."""
         return f"{self._azure.workspace_name}.sql.azuresynapse.net"
+
+    # Alias used by :class:`DedicatedPoolsAnalyzer` so it can hold a
+    # single name for the endpoint regardless of whether the underlying
+    # ARM client is workspace-bound or standalone-server-bound.
+    sql_endpoint = workspace_sql_endpoint

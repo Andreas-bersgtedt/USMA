@@ -347,7 +347,11 @@ def _check_scopes(skip_live: bool) -> list[CheckResult]:
         if scope.type is SourceType.DATABRICKS:
             from .sources.databricks import databricks_platform
             return databricks_platform(scope) == "azure"
-        return scope.type in {SourceType.SYNAPSE_WORKSPACE, SourceType.ADF}
+        return scope.type in {
+            SourceType.SYNAPSE_WORKSPACE,
+            SourceType.SYNAPSE_DEDICATED_SQL,
+            SourceType.ADF,
+        }
 
     aad_vars = ("AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET")
     aad_env_ok = all(os.environ.get(k) for k in aad_vars)

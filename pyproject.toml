@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "unified-synapse-migration-analyzer"
-version = "5.3.3"
+version = "5.4.0"
 description = "Analyze Azure Synapse Analytics workspaces to assess Microsoft Fabric Warehouse migration readiness."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -15,6 +15,7 @@ maintainers = [{ name = "Andreas Bergstedt" }]
 dependencies = [
     "azure-identity>=1.17",
     "azure-mgmt-synapse>=2.0.0",
+    "azure-mgmt-sql>=3.0",  # ADR-0009 — standalone Dedicated SQL pool (formerly SQL DW) discovery
     "azure-mgmt-datafactory>=9.0.0",  # Phase 2 — ADF as second source
     "azure-mgmt-resource>=23.1",
     "azure-mgmt-monitor>=6.0.2",

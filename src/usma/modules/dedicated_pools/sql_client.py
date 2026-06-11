@@ -28,6 +28,74 @@ def _load_query(name: str) -> str:
     return (_QUERIES_DIR / f"{name}.sql").read_text(encoding="utf-8")
 
 
+# SQLState 28000 + "Login failed for user ''" + "Invalid connection string
+# attribute" is the canonical signature of the AAD token-struct being
+# rejected by the SQL gateway (seen on standalone Dedicated SQL pools via
+# ``*.database.windows.net``). When we see it, retry with the
+# connection-string SP auth method which is the documented Microsoft
+# fallback for ODBC Driver 17.4+/18.x.
+def _is_aad_token_rejected(exc: pyodbc.Error) -> bool:
+    args = getattr(exc, "args", ()) or ()
+    sqlstate = str(args[0]) if args else ""
+    msg = str(args[1]) if len(args) > 1 else str(exc)
+    if sqlstate not in {"28000", "08001", "08S01", "HY000"}:
+        return False
+    lowered = msg.lower()
+    return (
+        "login failed for user ''" in lowered
+        or "invalid connection string attribute" in lowered
+    )
+
+
+# A different 28000 / 18456 signature: ``Login failed for user
+# '<token-identified principal>'``. This means the AAD admin **is**
+# configured (the gateway accepted the token) but the service
+# principal has no contained AAD user in the target database. There
+# is no auth-mechanism fallback that fixes this — the user has to run
+# ``CREATE USER [<sp-display-name>] FROM EXTERNAL PROVIDER`` inside
+# the database. Detecting it lets us (a) skip the pointless SP-direct
+# retry that will produce an identical error, and (b) emit a hint
+# that points at the right docs section.
+def _is_token_principal_unmapped(exc: pyodbc.Error) -> bool:
+    args = getattr(exc, "args", ()) or ()
+    sqlstate = str(args[0]) if args else ""
+    msg = str(args[1]) if len(args) > 1 else str(exc)
+    if sqlstate != "28000":
+        return False
+    lowered = msg.lower()
+    return "login failed for user '<token-identified principal>'" in lowered
+
+
+def _short_pyodbc_error(exc: pyodbc.Error) -> str:
+    args = getattr(exc, "args", ()) or ()
+    if len(args) >= 2:
+        return f"{args[0]}: {str(args[1])[:160]}"
+    return str(exc)[:160]
+
+
+def _odbc_quote(value: str) -> str:
+    """ODBC-quote a connection-string value.
+
+    Wraps in ``{...}`` so embedded ``;``, ``=``, spaces and other
+    delimiters are tolerated, and doubles any embedded ``}`` per the
+    ODBC connection-string grammar (``}`` is the only character that
+    needs escaping inside brace-quoted values). Without this, an SP
+    secret that contains ``}`` produces a malformed string that the
+    driver rejects as ``Invalid connection string attribute``.
+    """
+    return "{" + value.replace("}", "}}") + "}"
+
+
+class _DedicatedPoolAuthError(Exception):
+    """Aggregated error raised when *all* auth strategies fail.
+
+    Surfacing every attempt in one message means the analyzer's
+    per-pool ``connect: pool unreachable …`` line tells the user which
+    paths were tried and why each one failed — instead of swallowing
+    the first attempt and showing only the last error pattern.
+    """
+
+
 class DedicatedPoolSqlClient:
     """Connects to a single dedicated SQL pool using a service-principal access token.
 
@@ -57,6 +125,22 @@ class DedicatedPoolSqlClient:
             f"Connection Timeout={sql.login_timeout};"
         )
 
+    def _sp_direct_connection_string(self) -> str:
+        # ODBC Driver 17.4+ / 18.x can mint the AAD token internally
+        # when given the SP credentials directly; used as a fallback when
+        # the SQL_COPT_SS_ACCESS_TOKEN handshake is rejected (some
+        # Azure SQL / standalone DWU gateways return "Login failed for
+        # user ''" + "Invalid connection string attribute" when the token
+        # struct isn't recognised — most often seen on standalone
+        # Dedicated SQL pools accessed via *.database.windows.net).
+        azure = self._cfg.azure
+        return (
+            self._connection_string()
+            + "Authentication=ActiveDirectoryServicePrincipal;"
+            + f"UID={_odbc_quote(azure.client_id)};"
+            + f"PWD={_odbc_quote(azure.client_secret)};"
+        )
+
     def _token_struct(self) -> bytes:
         token = get_sql_access_token(self._cfg.azure)
         encoded = token.encode("utf-16-le")
@@ -64,10 +148,77 @@ class DedicatedPoolSqlClient:
 
     def _open(self) -> pyodbc.Connection:
         log.debug("Connecting to %s / %s", self._server, self._database)
-        attrs = {_SQL_COPT_SS_ACCESS_TOKEN: self._token_struct()}
-        conn = pyodbc.connect(self._connection_string(), attrs_before=attrs)
-        conn.timeout = self._cfg.sql.query_timeout
-        return conn
+        attempts: list[tuple[str, pyodbc.Error]] = []
+
+        # Attempt 1 — SQL_COPT_SS_ACCESS_TOKEN with an azure-identity
+        # minted AAD token. Works for Synapse-workspace pools and most
+        # standalone Azure SQL deployments.
+        try:
+            attrs = {_SQL_COPT_SS_ACCESS_TOKEN: self._token_struct()}
+            conn = pyodbc.connect(self._connection_string(), attrs_before=attrs)
+            conn.timeout = self._cfg.sql.query_timeout
+            return conn
+        except pyodbc.Error as exc:
+            # ``<token-identified principal>`` rejection is *not* a
+            # token-mechanism problem — switching auth method will
+            # produce an identical error. Surface it directly with the
+            # contained-user hint, no retry.
+            if _is_token_principal_unmapped(exc):
+                raise _DedicatedPoolAuthError(
+                    f"AAD authentication failed: [{ 'token-struct (SQL_COPT_SS_ACCESS_TOKEN)' }] "
+                    f"{_short_pyodbc_error(exc)} — the AAD admin is configured on the SQL "
+                    f"server (the gateway accepted the token) but the service principal has "
+                    f"no contained AAD user in database '{self._database}'. Run, **connected "
+                    f"to {self._database} as the AAD admin** (not master): "
+                    f"CREATE USER [<sp-display-name>] FROM EXTERNAL PROVIDER; "
+                    f"ALTER ROLE db_datareader ADD MEMBER [<sp-display-name>]; "
+                    f"GRANT VIEW DATABASE STATE TO [<sp-display-name>]; "
+                    f"GRANT VIEW DEFINITION TO [<sp-display-name>]. "
+                    f"See user-guide §24 'Pre-flight checklist'."
+                ) from exc
+            if not _is_aad_token_rejected(exc):
+                raise
+            attempts.append(("token-struct (SQL_COPT_SS_ACCESS_TOKEN)", exc))
+            log.warning(
+                "AAD token-struct auth rejected for %s/%s (%s); retrying with "
+                "Authentication=ActiveDirectoryServicePrincipal",
+                self._server, self._database, _short_pyodbc_error(exc),
+            )
+
+        # Attempt 2 — connection-string SP auth (ODBC driver mints its
+        # own token from UID/PWD). Documented Microsoft fallback for
+        # ODBC Driver 17.4+/18.x. Some standalone DWU gateways accept
+        # this path when they reject the token struct above.
+        try:
+            conn = pyodbc.connect(self._sp_direct_connection_string())
+            conn.timeout = self._cfg.sql.query_timeout
+            return conn
+        except pyodbc.Error as exc:
+            attempts.append(("Authentication=ActiveDirectoryServicePrincipal", exc))
+
+        # Both attempts failed — raise an aggregated error so the
+        # analyzer's ``connect: pool unreachable`` line tells the user
+        # which paths were tried and why each one failed. "Login failed
+        # for user ''" with an empty username on every attempt almost
+        # always means the SQL server has no Azure AD admin configured
+        # (server-level setting) — see docs/user-guide/24-standalone-dedicated-sql.md
+        # → "AAD admin gap is the #1 setup failure mode".
+        summary = "; ".join(
+            f"[{label}] {_short_pyodbc_error(err)}" for label, err in attempts
+        )
+        hint = (
+            " — both AAD paths returned 'Login failed for user '''; the SQL server "
+            "likely has no Azure AD admin set. See user-guide §24 "
+            "'AAD admin on the SQL server'."
+            if all(
+                "login failed for user ''" in str(err.args[1] if len(err.args) > 1 else err).lower()
+                for _label, err in attempts
+            )
+            else ""
+        )
+        raise _DedicatedPoolAuthError(
+            f"All AAD authentication attempts failed: {summary}{hint}"
+        )
 
     @contextmanager
     def connect(self) -> Iterator[pyodbc.Connection]:

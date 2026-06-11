@@ -46,6 +46,14 @@ const SELECTABLE_MODULES = ALL_MODULES.filter((m) => !ALWAYS_ON_MODULES.has(m));
 const MODULES_BY_SOURCE: Record<string, ReadonlySet<string>> = {
   synapse_workspace: new Set(ALL_MODULES.filter((m) => m !== "databricks_workflows" && m !== "bigquery_workloads" && m !== "snowflake_workloads")),
   adf: new Set(["pipelines", "fabric_mapping"]),
+  // Standalone Dedicated SQL pool (formerly SQL DW) — no Synapse
+  // workspace, so only the dedicated-pool analyzer, monitoring (Azure
+  // Monitor DWU metrics on Microsoft.Sql/servers/databases), storage
+  // (per-pool DMV reserved/data/index space; workspace ADLS inventory
+  // is automatically skipped) and fabric_mapping apply. Everything
+  // else (serverless, spark, pipelines, governance, security, cost)
+  // requires workspace context.
+  synapse_dedicated_sql: new Set(["dedicated_pools", "monitoring", "storage", "fabric_mapping"]),
   databricks: new Set(["databricks_workflows", "cost", "fabric_mapping"]),
   bigquery: new Set(["bigquery_workloads", "cost", "fabric_mapping"]),
   // Phase 7 Slice 7-E — Snowflake scopes expose ``snowflake_workloads``

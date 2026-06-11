@@ -20,7 +20,8 @@ from pathlib import Path
 from ...config import AppConfig
 from ...errors import format_error
 from ...progress import NullProgress, ProgressReporter
-from ..dedicated_pools.arm_client import SynapseArmClient
+from ...sources import SourceType
+from ..dedicated_pools.analyzer import DedicatedPoolArmClient, _select_arm_client
 from ..dedicated_pools.sql_client import DedicatedPoolSqlClient
 from .arm_client import StorageArmClient
 from .models import (
@@ -59,11 +60,28 @@ class StorageAnalyzer:
         cfg: AppConfig,
         *,
         progress: ProgressReporter | None = None,
+        pool_arm_client: DedicatedPoolArmClient | None = None,
     ) -> None:
         self._cfg = cfg
-        self._arm = StorageArmClient(cfg.azure)
         self._monitor = StorageMonitorClient(cfg.azure)
-        self._synapse_arm = SynapseArmClient(cfg.azure)
+        # Scope-aware: standalone Dedicated SQL pool (formerly SQL DW)
+        # has no parent Synapse workspace, so the workspace ADLS / blob
+        # account inventory path is skipped. We still collect per-pool
+        # DMV storage via the dedicated-pool ARM client Protocol so the
+        # Dashboard Storage section renders for standalone scopes.
+        # See ADR-0009.
+        scope = cfg.primary_scope()
+        self._is_standalone = (
+            scope is not None and scope.type == SourceType.SYNAPSE_DEDICATED_SQL
+        )
+        # Workspace ARM client (storage accounts) is only constructed for
+        # workspace scopes — it has no analogue for standalone DWU.
+        self._arm: StorageArmClient | None = (
+            None if self._is_standalone else StorageArmClient(cfg.azure)
+        )
+        self._pool_arm: DedicatedPoolArmClient = (
+            pool_arm_client or _select_arm_client(cfg)
+        )
         self._progress = progress or NullProgress()
 
     # ------------------------------------------------------------------ entry
@@ -74,6 +92,12 @@ class StorageAnalyzer:
             resource_group=self._cfg.azure.resource_group,
             generated_at=datetime.now(timezone.utc),
         )
+
+        if self._is_standalone:
+            # Standalone DWU: per-pool storage only.
+            self._progress.start(1, label="per-pool storage")
+            self._collect_dedicated_pool_storage(result)
+            return result
 
         accounts = self._collect_accounts(result)
         # Total = accounts list (1) + 1 step per account capacity + 1 step per
@@ -90,6 +114,7 @@ class StorageAnalyzer:
 
     # ------------------------------------------------------------------ steps
     def _collect_accounts(self, result: StorageAnalysis) -> list[StorageAccountInventory]:
+        assert self._arm is not None  # standalone scope short-circuits before this call
         try:
             accounts = list(self._arm.list_storage_accounts())
         except Exception as exc:  # noqa: BLE001
@@ -138,9 +163,10 @@ class StorageAnalyzer:
 
     def _collect_dedicated_pool_storage(self, result: StorageAnalysis) -> None:
         # Discover pools through the existing dedicated-pools ARM client so the
-        # filter logic (`SMA_DEDICATED_POOL`) is honoured.
+        # filter logic (`SMA_DEDICATED_POOL`) is honoured. The Protocol picks
+        # the right backend (`SynapseArmClient` vs `SqlServerArmClient`).
         try:
-            pools = list(self._synapse_arm.list_dedicated_pools())
+            pools = list(self._pool_arm.list_dedicated_pools())
         except Exception as exc:  # noqa: BLE001
             log.warning("dedicated pool discovery failed: %s", exc)
             result.errors.append(format_error("dedicated_pool_discovery", exc))
@@ -154,7 +180,7 @@ class StorageAnalyzer:
         self._progress.add_total(len(pools))
 
         sql_text = (_QUERIES_DIR / "pool_size.sql").read_text(encoding="utf-8")
-        server = self._synapse_arm.workspace_sql_endpoint()
+        server = self._pool_arm.sql_endpoint()
 
         def _one(pool) -> tuple[DedicatedPoolStorage, str | None]:
             entry = DedicatedPoolStorage(
