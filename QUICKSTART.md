@@ -41,8 +41,8 @@ A **module-based** walkthrough of the Unified Solution Migration Analyzer (USMA)
 | 4b | `databricks_workflows` | Databricks | _via_ `sma analyze-all` | [src/.../modules/databricks_workflows/](src/usma/modules/databricks_workflows) |
 | 4c | `bigquery_workloads` | BigQuery | _via_ `sma analyze-all` | [src/.../modules/bigquery_workloads/](src/usma/modules/bigquery_workloads) |
 | 4d | `snowflake_workloads` | Snowflake | _via_ `sma analyze-all` | [src/.../modules/snowflake_workloads/](src/usma/modules/snowflake_workloads) |
-| 5 | `monitoring`       | Synapse | `sma analyze-monitoring`       | [src/.../modules/monitoring/](src/usma/modules/monitoring) |
-| 6 | `storage`          | Synapse | `sma analyze-storage`          | [src/.../modules/storage/](src/usma/modules/storage) |
+| 5 | `monitoring`       | Synapse + standalone DWU | `sma analyze-monitoring`       | [src/.../modules/monitoring/](src/usma/modules/monitoring) |
+| 6 | `storage`          | Synapse + standalone DWU | `sma analyze-storage`          | [src/.../modules/storage/](src/usma/modules/storage) |
 | 7 | `fabric_mapping`   | Synapse + ADF | `sma map-to-fabric`            | [src/.../modules/fabric_mapping/](src/usma/modules/fabric_mapping) |
 | 8 | `governance` (v1.2)        | Synapse | `sma analyze-governance`       | [src/.../modules/governance/](src/usma/modules/governance) |
 | 9 | `security`   (v1.2)        | Synapse | `sma analyze-security`         | [src/.../modules/security/](src/usma/modules/security) |

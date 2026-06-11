@@ -114,10 +114,11 @@ SMA_OUTPUT_DIR=./output
 | `serverless_pools` | ✅ | n/a | the standalone topology has no built-in serverless endpoint |
 | `spark_pools` | ✅ | n/a | Spark lives under the Synapse workspace |
 | `pipelines` | ✅ | n/a | pipelines live under the Synapse workspace or ADF |
-| `monitoring` | ✅ | ⛔ | DWU capacity metrics for the standalone topology land in a follow-up slice |
-| `storage`, `security`, `governance` | ✅ | ⛔ | Synapse-workspace concepts; the standalone topology has no equivalent |
+| `monitoring` | ✅ | ✅ | DWU capacity metrics pulled from `Microsoft.Sql/servers/databases` (snake_case names normalised to the workspace PascalCase set) so `fabric_mapping.cu_projection` derives a Fabric SKU recommendation from real DWU utilization |
+| `storage` | ✅ | ✅ | per-pool reserved / data / index / unused space via DMVs — exactly what the SPA Dashboard Storage card needs; workspace ADLS / blob inventory is skipped (no parent workspace) |
+| `security`, `governance` | ✅ | ⛔ | Synapse-workspace concepts; the standalone topology has no equivalent |
 | `cost` | ✅ | ⛔ | cost resource-id classifier still gated to the Synapse namespace; tracked separately |
-| `fabric_mapping` | ✅ | ✅ | consumes `dedicated_pools.json` unchanged |
+| `fabric_mapping` | ✅ | ✅ | consumes `dedicated_pools.json` + `monitoring.json` unchanged |
 
 The active support map is exposed by `MODULE_SPECS[<module>].supports`
 in code; `MODULE_SPECS["dedicated_pools"].supports` covers both
@@ -148,15 +149,19 @@ client:
   today; standalone DWU rows show up as `other`. A widening to
   `Microsoft.Sql/servers/.../databases` (filtered by DWU edition) is
   the obvious follow-up.
-- **No DWU capacity metric collection.** `monitoring` queries metrics
-  on the Synapse-workspace resource id; the standalone equivalent
-  (`Microsoft.Sql/servers/.../databases`) needs a separate metric
-  client wiring.
 - **Auto-pause / scale-action history.** Not currently collected for
   workspace pools either; tracked as a generic dedicated-pools gap.
 - **Estate Overview cloud chip.** Standalone DWU shows the generic
   "Dedicated SQL" label in the type column; the per-cloud Azure chip
   works unchanged.
+- **SQL Surface page when the DB has no code objects.** If the pool
+  contains zero stored procedures / views / functions but plenty of
+  query history (typical of raw-staging DWUs), the SPA SQL Surface
+  page still renders the **Top Queries**, **Top Consumed Objects**
+  and **Workload Capture Stats** sections from `top_queries` /
+  `top_consumed_objects` / `workload_capture_stats` in
+  `dedicated_pools.json` — the page no longer short-circuits to the
+  empty state just because `code_objects` is empty.
 
 ## End-to-end smoke runbook
 

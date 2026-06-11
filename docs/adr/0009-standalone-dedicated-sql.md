@@ -38,11 +38,18 @@ optional `arm_client` parameter so the existing constructor calls
 workspace topology.
 
 `MODULE_SPECS["dedicated_pools"].supports` is widened to include both
-source types. Other modules (`pipelines`, `monitoring`, `storage`,
-`security`, `governance`, `fabric_validation`, `serverless_pools`,
-`spark_pools`) stay scoped to `SYNAPSE_WORKSPACE` — they have no
-analogue under a standalone SQL server. `cost` and `fabric_mapping`
-are deferred to Slice D and tracked in the planning doc.
+source types. `monitoring` (Slice F), `storage` (Slice G) and
+`fabric_mapping` (Slice D) are also widened — they all have a useful
+standalone analogue: monitoring queries `Microsoft.Sql/servers/databases`
+metrics (snake_case names normalised back to the workspace PascalCase
+set), storage runs the per-pool DMV path while skipping workspace
+ADLS / blob inventory, and fabric_mapping consumes the resulting
+artefacts unchanged. The remaining modules (`pipelines`, `security`,
+`governance`, `fabric_validation`, `serverless_pools`, `spark_pools`)
+stay scoped to `SYNAPSE_WORKSPACE` — they have no analogue under a
+standalone SQL server. `cost` is still deferred (its resource-id
+classifier needs widening to the `Microsoft.Sql/servers/databases`
+namespace).
 
 ## Why not extend `SYNAPSE_WORKSPACE` with a discriminator?
 

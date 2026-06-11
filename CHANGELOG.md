@@ -58,10 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Cost attribution still gates on the `Microsoft.Synapse/workspaces/.../sqlPools`
   resource-id prefix; standalone DWU rows land in the `other` bucket
-  for now.
-- `monitoring` does not yet pull DWU capacity metrics for the
-  standalone topology; the equivalent
-  `Microsoft.Sql/servers/.../databases` metric wiring is a follow-up.
+  for now. (`monitoring` and `storage` ship in Slices F + G below.)
 
 ### Slice D — Estate overview + Fabric mapping (this release)
 

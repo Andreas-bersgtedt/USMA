@@ -119,10 +119,18 @@ MANIFEST: tuple[ModuleAccess, ...] = (
     ),
     ModuleAccess(
         module="monitoring",
-        purpose="Pull DWU capacity metrics for dedicated pools and Spark "
-                "vCore-hour metrics for Spark pools.",
+        purpose="Pull DWU capacity metrics for dedicated pools (workspace "
+                "and standalone Dedicated SQL pool topologies) and Spark "
+                "vCore-hour metrics for Spark pools. Standalone DWU pools "
+                "are queried on the Microsoft.Sql/servers/databases resource "
+                "id with the snake_case metric names (dwu_consumption_percent, "
+                "dwu_limit, cpu_percent, ...) normalised back to the workspace "
+                "PascalCase set so downstream Fabric capacity projection is "
+                "source-topology agnostic.",
         reads=(
             "MonitorManagementClient.metrics.list on the workspace and pool resource IDs",
+            "SqlManagementClient.databases.list_by_server (standalone DWU only, "
+            "filtered to sku.tier == 'DataWarehouse')",
         ),
         azure_rbac=("Reader + Monitoring Reader (subscription or RG)",),
         synapse_rbac=(),
@@ -132,18 +140,21 @@ MANIFEST: tuple[ModuleAccess, ...] = (
         module="storage",
         purpose="Inventory dedicated-pool table storage and the ADLS Gen2 / "
                 "blob accounts linked to the workspace. Capacity only — never "
-                "lists file contents.",
+                "lists file contents. For standalone Dedicated SQL pool "
+                "scopes the workspace ADLS / blob inventory is skipped "
+                "entirely (no parent workspace) and only the per-pool DMV "
+                "path runs.",
         reads=(
             "T-SQL (per pool): sys.dm_pdw_nodes_db_partition_stats joined "
             "through sys.pdw_table_mappings to sys.tables",
-            "StorageManagementClient.storage_accounts.list / get_properties",
-            "MonitorManagementClient.metrics (UsedCapacity)",
+            "StorageManagementClient.storage_accounts.list / get_properties (workspace scopes only)",
+            "MonitorManagementClient.metrics (UsedCapacity, workspace scopes only)",
         ),
         azure_rbac=(
             "Reader (workspace or RG)",
             "Reader on each linked storage account (or subscription/RG-wide "
-            "Reader for simplicity)",
-            "Monitoring Reader (for UsedCapacity metric)",
+            "Reader for simplicity) — workspace scopes only",
+            "Monitoring Reader (for UsedCapacity metric) — workspace scopes only",
         ),
         synapse_rbac=(),
         sql_grants=("Same as dedicated_pools (db_datareader + VIEW DATABASE STATE).",),
