@@ -108,6 +108,16 @@ MODULE_SPECS: dict[str, ModuleSpec] = {
     ),
     "storage": _spec(
         "storage",
+        # Standalone Dedicated SQL pool (formerly SQL DW) supports the
+        # per-pool storage DMV path (reserved / data / index space) so
+        # the Dashboard Storage section renders for standalone scopes;
+        # workspace ADLS / blob inventory is skipped automatically by
+        # the analyzer (no parent workspace = no accounts to list).
+        # See ADR-0009.
+        supports=frozenset({
+            SourceType.SYNAPSE_WORKSPACE,
+            SourceType.SYNAPSE_DEDICATED_SQL,
+        }),
         description="Linked storage accounts and access patterns.",
     ),
     "governance": _spec(

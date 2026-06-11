@@ -134,6 +134,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     filter, single-pool filter, missing-id skip, name rewriting
     with and without an alias map, end-to-end scope dispatch in
     the analyzer, and the module-spec predicate.
+- **Slice G — Standalone Dedicated SQL pool storage (Dashboard
+  Storage section).** The `storage` module now runs for
+  `SYNAPSE_DEDICATED_SQL` scopes and produces the per-pool
+  reserved / data / index / unused space rows that the SPA
+  Dashboard's `<StorageSection>` consumes, fixing the gap where
+  the Dashboard rendered no Storage card for standalone Dedicated
+  SQL pool runs.
+  - `StorageAnalyzer.__init__` is now scope-aware: when
+    `cfg.primary_scope().type == SYNAPSE_DEDICATED_SQL`, the
+    workspace `StorageArmClient` (ADLS / blob account inventory)
+    is not constructed at all — there is no parent workspace, so
+    nothing to enumerate — and `run()` short-circuits to the
+    per-pool DMV path alone.
+  - Pool discovery flows through the unified
+    `DedicatedPoolArmClient` Protocol via
+    `_select_arm_client(cfg)` (same plumbing introduced in
+    Slice C), so `SqlServerArmClient.list_dedicated_pools()` +
+    `sql_endpoint()` are picked automatically. The existing
+    `pool_size.sql` DMV query runs unchanged against
+    `<server>.database.windows.net`.
+  - `MODULE_SPECS["storage"].supports` widened to include
+    `SYNAPSE_DEDICATED_SQL`; SPA Run page whitelist now exposes
+    the **Storage** checkbox for standalone scopes.
+  - New `tests/test_storage_standalone_dwu.py` (3 cases): the
+    standalone path skips workspace inventory, the workspace
+    path still wires up both ARM clients, and the module-spec
+    predicate.
 
 ### Fixed
 
