@@ -120,6 +120,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `*.sql.azuresynapse.net`. The fallback is the documented
   Microsoft path for ODBC Driver 17.4+/18.x service-principal auth
   against Azure SQL.
+- **Dedicated pool DMV connection — ODBC value quoting + aggregated
+  error.** The SP-direct fallback above now properly escapes any
+  `}` inside the service-principal secret (doubling it to `}}` per
+  the ODBC connection-string grammar), so secrets that happen to
+  contain `}` no longer corrupt the connection string into the
+  same `Invalid connection string attribute` rejection we were
+  trying to recover from. When both AAD paths fail, the analyzer
+  now raises an aggregated `_DedicatedPoolAuthError` listing
+  every attempt with its labelled error text — and when both
+  attempts report `Login failed for user ''`, the message appends
+  a pointer to "user-guide §24 'AAD admin on the SQL server'"
+  because the missing server-level Azure AD admin is the
+  #1 setup failure mode for standalone DWU.
 
 ## [5.3.3] - 2026-06-01
 

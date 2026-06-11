@@ -128,3 +128,87 @@ def test_is_aad_token_rejected_rejects_other_28000_errors():
     # permissions issue, not the token-attribute bug.
     exc = pyodbc.Error("28000", "[28000] Login failed for user 'someone@example.com'.")
     assert mod._is_aad_token_rejected(exc) is False
+
+
+def test_odbc_quote_escapes_closing_brace():
+    # SP secrets occasionally contain ``}``; ODBC brace-quoted values
+    # must double that to ``}}`` or the driver rejects the string as
+    # ``Invalid connection string attribute (0)``.
+    assert mod._odbc_quote("plain") == "{plain}"
+    assert mod._odbc_quote("with}brace") == "{with}}brace}"
+    assert mod._odbc_quote("two}}braces}") == "{two}}}}braces}}}"
+
+
+def test_sp_direct_connection_string_quotes_secret_with_braces(monkeypatch):
+    cfg = _make_cfg()
+    # Replace just the secret to include a ``}`` — re-use dataclasses.replace
+    # via the constructor for the AzureConfig.
+    from dataclasses import replace as _dc_replace
+    cfg = _dc_replace(cfg, azure=_dc_replace(cfg.azure, client_secret="abc}def"))
+    client = DedicatedPoolSqlClient(cfg, "demoserver.database.windows.net", "pool1")
+    monkeypatch.setattr(mod, "resolve_odbc_driver", lambda _d: "ODBC Driver 18 for SQL Server")
+
+    conn_str = client._sp_direct_connection_string()
+    # The secret's ``}`` must be doubled inside the braces.
+    assert "PWD={abc}}def}" in conn_str
+    # And the UID (no special chars) stays braced unchanged.
+    assert "UID={client-uuid}" in conn_str
+
+
+def test_open_raises_aggregated_error_when_both_attempts_fail(monkeypatch, caplog):
+    """When the SP-direct fallback also fails, the user sees both errors
+    labelled, plus the AAD-admin hint when both return 'user '''."""
+    cfg = _make_cfg()
+    client = DedicatedPoolSqlClient(cfg, "demoserver.database.windows.net", "pool1")
+    monkeypatch.setattr(mod, "get_sql_access_token", lambda _azure: "fake-token")
+    monkeypatch.setattr(mod, "resolve_odbc_driver", lambda _d: "ODBC Driver 18 for SQL Server")
+
+    first = _make_token_rejected_error()
+    # SP-direct also fails with "Login failed for user ''" — typical signature
+    # when the SQL server has no AAD admin set.
+    second = pyodbc.Error(
+        "28000",
+        "[28000] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]"
+        "Login failed for user ''. (18456); "
+        "[28000] [Microsoft][ODBC Driver 18 for SQL Server]"
+        "Invalid connection string attribute (0)",
+    )
+
+    side_effects = [first, second]
+    def _connect_side_effect(*_a, **_kw):
+        raise side_effects.pop(0)
+
+    with patch.object(mod.pyodbc, "connect", side_effect=_connect_side_effect):
+        with pytest.raises(mod._DedicatedPoolAuthError) as ei:
+            client._open()
+
+    msg = str(ei.value)
+    # Both attempts labelled, in the order they were tried.
+    assert "[token-struct (SQL_COPT_SS_ACCESS_TOKEN)]" in msg
+    assert "[Authentication=ActiveDirectoryServicePrincipal]" in msg
+    # The AAD-admin hint fires when every attempt returned ``user ''``.
+    assert "no Azure AD admin set" in msg
+    assert "user-guide §24" in msg
+
+
+def test_open_aggregated_error_omits_aad_admin_hint_when_one_attempt_is_different(monkeypatch):
+    """The AAD-admin hint should only appear when *both* attempts return
+    the empty-user pattern; otherwise we'd mislead the user."""
+    cfg = _make_cfg()
+    client = DedicatedPoolSqlClient(cfg, "demoserver.database.windows.net", "pool1")
+    monkeypatch.setattr(mod, "get_sql_access_token", lambda _azure: "fake-token")
+    monkeypatch.setattr(mod, "resolve_odbc_driver", lambda _d: "ODBC Driver 18 for SQL Server")
+
+    first = _make_token_rejected_error()
+    # SP-direct fails with a different error (e.g. wrong secret).
+    second = pyodbc.Error(
+        "28000",
+        "[28000] Login failed for user 'app://client-uuid@tenant'.",
+    )
+    side_effects = [first, second]
+    with patch.object(mod.pyodbc, "connect", side_effect=lambda *_a, **_kw: (_ for _ in ()).throw(side_effects.pop(0))):
+        with pytest.raises(mod._DedicatedPoolAuthError) as ei:
+            client._open()
+    msg = str(ei.value)
+    assert "no Azure AD admin set" not in msg
+    assert "[Authentication=ActiveDirectoryServicePrincipal]" in msg

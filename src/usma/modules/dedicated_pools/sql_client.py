@@ -54,6 +54,29 @@ def _short_pyodbc_error(exc: pyodbc.Error) -> str:
     return str(exc)[:160]
 
 
+def _odbc_quote(value: str) -> str:
+    """ODBC-quote a connection-string value.
+
+    Wraps in ``{...}`` so embedded ``;``, ``=``, spaces and other
+    delimiters are tolerated, and doubles any embedded ``}`` per the
+    ODBC connection-string grammar (``}`` is the only character that
+    needs escaping inside brace-quoted values). Without this, an SP
+    secret that contains ``}`` produces a malformed string that the
+    driver rejects as ``Invalid connection string attribute``.
+    """
+    return "{" + value.replace("}", "}}") + "}"
+
+
+class _DedicatedPoolAuthError(Exception):
+    """Aggregated error raised when *all* auth strategies fail.
+
+    Surfacing every attempt in one message means the analyzer's
+    per-pool ``connect: pool unreachable …`` line tells the user which
+    paths were tried and why each one failed — instead of swallowing
+    the first attempt and showing only the last error pattern.
+    """
+
+
 class DedicatedPoolSqlClient:
     """Connects to a single dedicated SQL pool using a service-principal access token.
 
@@ -95,8 +118,8 @@ class DedicatedPoolSqlClient:
         return (
             self._connection_string()
             + "Authentication=ActiveDirectoryServicePrincipal;"
-            + f"UID={{{azure.client_id}}};"
-            + f"PWD={{{azure.client_secret}}};"
+            + f"UID={_odbc_quote(azure.client_id)};"
+            + f"PWD={_odbc_quote(azure.client_secret)};"
         )
 
     def _token_struct(self) -> bytes:
@@ -106,20 +129,60 @@ class DedicatedPoolSqlClient:
 
     def _open(self) -> pyodbc.Connection:
         log.debug("Connecting to %s / %s", self._server, self._database)
+        attempts: list[tuple[str, pyodbc.Error]] = []
+
+        # Attempt 1 — SQL_COPT_SS_ACCESS_TOKEN with an azure-identity
+        # minted AAD token. Works for Synapse-workspace pools and most
+        # standalone Azure SQL deployments.
         try:
             attrs = {_SQL_COPT_SS_ACCESS_TOKEN: self._token_struct()}
             conn = pyodbc.connect(self._connection_string(), attrs_before=attrs)
+            conn.timeout = self._cfg.sql.query_timeout
+            return conn
         except pyodbc.Error as exc:
             if not _is_aad_token_rejected(exc):
                 raise
+            attempts.append(("token-struct (SQL_COPT_SS_ACCESS_TOKEN)", exc))
             log.warning(
                 "AAD token-struct auth rejected for %s/%s (%s); retrying with "
                 "Authentication=ActiveDirectoryServicePrincipal",
                 self._server, self._database, _short_pyodbc_error(exc),
             )
+
+        # Attempt 2 — connection-string SP auth (ODBC driver mints its
+        # own token from UID/PWD). Documented Microsoft fallback for
+        # ODBC Driver 17.4+/18.x. Some standalone DWU gateways accept
+        # this path when they reject the token struct above.
+        try:
             conn = pyodbc.connect(self._sp_direct_connection_string())
-        conn.timeout = self._cfg.sql.query_timeout
-        return conn
+            conn.timeout = self._cfg.sql.query_timeout
+            return conn
+        except pyodbc.Error as exc:
+            attempts.append(("Authentication=ActiveDirectoryServicePrincipal", exc))
+
+        # Both attempts failed — raise an aggregated error so the
+        # analyzer's ``connect: pool unreachable`` line tells the user
+        # which paths were tried and why each one failed. "Login failed
+        # for user ''" with an empty username on every attempt almost
+        # always means the SQL server has no Azure AD admin configured
+        # (server-level setting) — see docs/user-guide/24-standalone-dedicated-sql.md
+        # → "AAD admin gap is the #1 setup failure mode".
+        summary = "; ".join(
+            f"[{label}] {_short_pyodbc_error(err)}" for label, err in attempts
+        )
+        hint = (
+            " — both AAD paths returned 'Login failed for user '''; the SQL server "
+            "likely has no Azure AD admin set. See user-guide §24 "
+            "'AAD admin on the SQL server'."
+            if all(
+                "login failed for user ''" in str(err.args[1] if len(err.args) > 1 else err).lower()
+                for _label, err in attempts
+            )
+            else ""
+        )
+        raise _DedicatedPoolAuthError(
+            f"All AAD authentication attempts failed: {summary}{hint}"
+        )
 
     @contextmanager
     def connect(self) -> Iterator[pyodbc.Connection]:
