@@ -100,8 +100,8 @@ AZURE_TENANT_ID=...
 AZURE_CLIENT_ID=...
 AZURE_CLIENT_SECRET=...
 AZURE_SUBSCRIPTION_ID=...
-SYNAPSE_RESOURCE_GROUP=rg-example-sql      # the SQL server's RG
-SYNAPSE_WORKSPACE_NAME=examplesqlserver        # the SQL server name
+SYNAPSE_RESOURCE_GROUP=rg-example-sql           # the SQL server's RG
+SYNAPSE_WORKSPACE_NAME=examplesqlserver         # the SQL server name
 SYNAPSE_DEDICATED_POOL=                          # leave blank for all DWU dbs; set to one db to filter
 SMA_OUTPUT_DIR=./output
 ```
@@ -165,8 +165,8 @@ client:
 
 ## End-to-end smoke runbook
 
-Use this checklist the first time you point USMA at a customer's
-standalone Dedicated SQL pool server. It is the same flow Slice E was
+Use this checklist the first time you point USMA at a standalone
+Dedicated SQL pool server. It is the same flow Slice E was
 designed to validate; treat it as the production-readiness gate for
 that scope.
 
@@ -180,8 +180,8 @@ that scope.
    auto-discovery to surface the server in the dropdown.
 2. **AAD admin on the SQL server.** The SP can only run
    `CREATE USER … FROM EXTERNAL PROVIDER` against a database when a
-   server-level AAD admin already exists. If the customer's server
-   has none, set one (e.g. their DBA group) — this is a one-time
+   server-level AAD admin already exists. If the server has none,
+   set one (e.g. a DBA group) — this is a one-time
    server-property change in the portal / az CLI.
 3. **Per-database grants.** Sign in to **each DWU database** (master
    does not need grants) as the AAD admin and run:
@@ -291,7 +291,7 @@ Expected artefacts under `./output/`:
   those modules behind the source-type predicate; the CLI's
   `analyze-all` skips them via `MODULE_SPECS[*].supports_source`.
 - **Firewall / private-endpoint surprises.** Standalone DWU servers
-  more commonly have customer-managed firewalls than Synapse
+  more commonly have user-managed firewalls than Synapse
   workspaces. The DMV pass fails fast with a clear
   `pyodbc.OperationalError` if the analyzer host's egress IP is not
   whitelisted — surface that gotcha early in the runbook.

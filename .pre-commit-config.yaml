@@ -1,0 +1,18 @@
+# Pre-commit hooks for the USMA repository.
+# Install once per clone:
+#   pip install pre-commit
+#   pre-commit install
+repos:
+  - repo: local
+    hooks:
+      - id: no-customer-data
+        name: Block customer identifiers
+        description: |
+          Scans staged files for known customer-identifying tokens
+          (server names, resource groups, pool names). The denylist
+          is base64-encoded in scripts/check_customer_data.py so the
+          tokens themselves do not live in the repo.
+        entry: python scripts/check_customer_data.py
+        language: system
+        pass_filenames: true
+        stages: [commit]

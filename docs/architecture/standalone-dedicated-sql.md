@@ -1,7 +1,7 @@
 # Standalone Dedicated SQL pool (formerly SQL DW) — design + plan
 
 > **Branch:** `feature/standalone-dedicated-sql-dw`
-> **Status:** Slices A–G shipped. Live customer execution confirmed against `Microsoft.Sql/servers/examplesqlserver/databases/exampledwpool` (DW900, North Europe) — dedicated_pools, monitoring (DWU utilization) and storage all populate end-to-end; Fabric mapping consumes the artefacts unchanged.
+> **Status:** Slices A–G shipped. End-to-end execution validated against a representative `Microsoft.Sql/servers/<server>/databases/<db>` scope — dedicated_pools, monitoring (DWU utilization) and storage all populate end-to-end; Fabric mapping consumes the artefacts unchanged.
 > **Related:** [ADR-0009](../adr/0009-standalone-dedicated-sql.md)
 
 ## Problem
@@ -150,7 +150,7 @@ SQL access token for standalone scopes.
 | B — Web SPA Configuration | Surface the new source type in the Configuration page (radio entry + server-name field), live validation via the new provider, `web/config_io.py` read/write/validate, `/api/config/discover-sql-servers` endpoint, estate-card label. | ✅ done |
 | C — Documentation & telemetry | New `docs/user-guide/24-standalone-dedicated-sql.md`, update `access_manifest.py`, `QUICKSTART.md`, `CHANGELOG.md`. | ✅ done |
 | D — Estate overview + Fabric mapping | Verify the standalone descriptor surfaces correctly in the Estate Overview tile and that the existing `fabric_mapping` rules consume the dedicated-pool artifact unchanged. | ✅ done |
-| E — End-to-end smoke against a real customer scope | Validate against the dev tenant that triggered the report; document runbook gotchas. | ✅ done |
+| E — End-to-end smoke against a standalone DWU scope | Validate end-to-end against a representative standalone DWU scope; document runbook gotchas. | ✅ done |
 | **F — Monitoring (DWU utilization)** | `MonitorClient.list_standalone_dwu_resource_ids()` enumerates DWU-tier databases under `Microsoft.Sql/servers`. `STANDALONE_DWU_POOL_METRICS` requests the snake_case names exposed by `Microsoft.Sql/servers/databases` (`dwu_consumption_percent`, `dwu_limit`, `cpu_percent`, …) and `STANDALONE_TO_WORKSPACE_METRIC` rewrites them to the workspace PascalCase set so `fabric_mapping.cu_projection` derives the Fabric SKU recommendation from real utilization. `MonitoringAnalyzer.run()` dispatches by `cfg.primary_scope().type`. SPA Run page exposes the **Monitoring** checkbox for standalone scopes. | ✅ done |
 | **G — Storage (Dashboard Storage card)** | `StorageAnalyzer` is scope-aware: workspace ADLS / blob inventory is skipped entirely for standalone scopes (no parent workspace) and `run()` short-circuits to the per-pool DMV path. Pool discovery flows through the shared `DedicatedPoolArmClient` Protocol via `_select_arm_client(cfg)` so `SqlServerArmClient.list_dedicated_pools()` + `sql_endpoint()` are picked automatically. SPA Run page exposes the **Storage** checkbox for standalone scopes. | ✅ done |
 | **H — SQL Surface empty-state fix** | SPA `<CodeObjects>` page no longer short-circuits to the empty state when `code_objects` is empty but `top_queries` / `top_consumed_objects` / `workload_capture_stats` carry data (typical raw-staging DWU shape). | ✅ done |
