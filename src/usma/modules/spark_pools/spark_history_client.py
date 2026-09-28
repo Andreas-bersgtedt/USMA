@@ -98,7 +98,9 @@ def _conf_from_raw(raw: Any) -> dict[str, Any] | None:
     )
     if creation_req is None:
         return None
-    conf = getattr(creation_req, "conf", None)
+    conf = getattr(creation_req, "configuration", None)
+    if conf is None:
+        conf = getattr(creation_req, "conf", None)
     if isinstance(conf, dict):
         return conf
     return None
@@ -146,6 +148,7 @@ class SparkHistoryClient:
         self._azure = azure
         self._endpoint = f"https://{azure.workspace_name}.dev.azuresynapse.net"
         self._credential = get_credential(azure)
+        self._collection_status: dict[tuple[str, str], bool] = {}
 
     def _client(self, pool_name: str) -> SparkClient:
         return SparkClient(
@@ -154,6 +157,14 @@ class SparkHistoryClient:
             spark_pool_name=pool_name,
             livy_api_version=_LIVY_API_VERSION,
         )
+
+    def collection_status(
+        self,
+        pool_name: str,
+        livy_kind: Literal["batch", "session"],
+    ) -> bool | None:
+        """Whether paging reached the end of the endpoint's available history."""
+        return self._collection_status.get((pool_name, livy_kind))
 
     # ------------------------------------------------------------------ batches
     def iter_batch_jobs(
@@ -217,19 +228,19 @@ class SparkHistoryClient:
         page_size: int,
     ) -> Iterator[SparkRunRecord]:
         client = self._client(pool_name)
+        complete = False
         try:
             offset = 0
             yielded = 0
             scanned = 0
             page_size = max(1, min(page_size, _MAX_PAGE_SIZE))
             limit = min(limit, _HARD_LIMIT)
-            stop_old = False
             server_total: int | None = None
             # Diagnostic: histogram of (state, result, trigger_kind, outcome)
             # tuples per (pool, livy_kind). Surfaces at INFO so a user can
             # confirm classification when Studio and the analyzer disagree.
             outcome_hist: Counter[tuple[str, str, str, str]] = Counter()
-            while yielded < limit:
+            while scanned < limit:
                 resp = list_fn(client, offset, page_size)
                 items = (
                     getattr(resp, sessions_field, None)
@@ -240,12 +251,13 @@ class SparkHistoryClient:
                 # for this pool. Capture it on the first page so we can detect
                 # under-collection at the end of the loop.
                 if server_total is None:
-                    server_total = (
-                        getattr(resp, "total", None)
-                        or getattr(resp, "total_sessions", None)
-                        or getattr(resp, "total_batches", None)
-                    )
+                    for total_name in ("total", "total_sessions", "total_batches"):
+                        candidate = getattr(resp, total_name, None)
+                        if candidate is not None:
+                            server_total = int(candidate)
+                            break
                 if not items:
+                    complete = server_total is None or scanned >= server_total
                     break
                 for raw in items:
                     scanned += 1
@@ -264,24 +276,19 @@ class SparkHistoryClient:
                         trigger_kind,
                         rec.outcome,
                     )] += 1
-                    # Time window filter (Python-side; Livy API returns newest-first
-                    # but we still scan & stop early once the page is fully older
-                    # than the window for efficiency).
-                    if rec.submitted_at is not None and rec.submitted_at < start:
-                        stop_old = True
-                        continue
-                    yield rec
-                    yielded += 1
-                    if yielded >= limit:
+                    # Fetch overlap candidates irrespective of submit time. An
+                    # older submission can have an execution interval inside
+                    # the observation window; aggregation clips it precisely.
+                    if _overlaps_window(rec, start):
+                        yield rec
+                        yielded += 1
+                    if scanned >= limit:
                         break
-                # If a whole page was entirely outside the window, stop paging.
-                if stop_old and all(
-                    (getattr(getattr(r, "scheduler", None), "submitted_at", None) or _epoch())
-                    < start
-                    for r in items
-                ):
+                if scanned >= limit:
+                    complete = server_total is not None and scanned >= server_total
                     break
                 if len(items) < page_size:
+                    complete = server_total is None or scanned >= server_total
                     break
                 offset += len(items)
             log.info(
@@ -297,20 +304,32 @@ class SparkHistoryClient:
                     "spark_history pool=%s livy=%s outcome_hist (top): %s",
                     pool_name, livy_kind, top,
                 )
-            if server_total is not None and scanned < server_total and not stop_old:
+            if server_total is not None and scanned < server_total:
                 log.warning(
                     "spark_history pool=%s livy=%s under-collected %d of %d runs (raise SMA_SPARK_RUN_LIMIT or check pagination)",
                     pool_name, livy_kind, scanned, server_total,
                 )
         finally:
+            self._collection_status[(pool_name, livy_kind)] = complete
             try:
                 client.close()
             except Exception:  # noqa: BLE001
                 pass
 
 
-def _epoch() -> datetime:
-    return datetime(1970, 1, 1, tzinfo=timezone.utc)
+def _utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _overlaps_window(record: SparkRunRecord, start: datetime) -> bool:
+    run_start = record.accounting_start_at or record.submitted_at
+    if run_start is None:
+        return False
+    if record.ended_at is None:
+        return True
+    return _utc(record.ended_at) > _utc(start)
 
 
 # ---------------------------------------------------------------- normalization
@@ -335,18 +354,34 @@ def vcore_shape_from_app_info(
     """
     dc = ec = nx = None
     if app_info:
-        dc = _as_int(app_info.get("driverCores") or app_info.get("driver_cores"))
-        ec = _as_int(app_info.get("executorCores") or app_info.get("executor_cores"))
-        nx = _as_int(
-            app_info.get("numExecutors")
-            or app_info.get("num_executors")
-            or app_info.get("executorCount")
-        )
+        dc = _as_int(_mapping_value(app_info, "driverCores", "driver_cores"))
+        ec = _as_int(_mapping_value(app_info, "executorCores", "executor_cores"))
+        nx = _as_int(_mapping_value(
+            app_info, "numExecutors", "num_executors", "executorCount",
+        ))
     if creation_request is not None:
-        dc = dc or _as_int(getattr(creation_request, "driver_cores", None))
-        ec = ec or _as_int(getattr(creation_request, "executor_cores", None))
-        nx = nx or _as_int(getattr(creation_request, "executor_count", None))
+        dc = dc if dc is not None else _as_int(_field(creation_request, "driver_cores"))
+        ec = ec if ec is not None else _as_int(_field(creation_request, "executor_cores"))
+        nx = nx if nx is not None else _as_int(_field(creation_request, "executor_count"))
     return dc, ec, nx
+
+
+def _mapping_value(values: Any, *keys: str) -> Any:
+    for key in keys:
+        if key in values and values[key] is not None:
+            return values[key]
+    return None
+
+
+def _field(value: Any, name: str) -> Any:
+    if isinstance(value, dict):
+        return value.get(name)
+    return getattr(value, name, None)
+
+
+def _first_datetime(*values: Any) -> datetime | None:
+    value = next((value for value in values if isinstance(value, datetime)), None)
+    return _utc(value) if value is not None else None
 
 
 def compute_vcore_seconds(
@@ -438,35 +473,89 @@ def _normalize(
     scheduler = getattr(raw, "scheduler", None)
     plugin = getattr(raw, "plugin", None)
     livy_info = getattr(raw, "livy_info", None)
-    # `scheduler.submitted_at` is the primary timestamp, but for sessions that
-    # have already shut down the SDK sometimes drops the scheduler block. Fall
-    # back through plugin lifecycle timestamps (preparation / submission start)
-    # and finally to `livy_info.created_at` / top-level `created_at` so the run
-    # is still bucketed into the time-window aggregation correctly. Without
-    # this fallback, stopped notebook sessions were excluded from every window
-    # rollup and the Dashboard reported fewer runs than the Synapse Studio UI.
-    submitted_at = (
-        (getattr(scheduler, "submitted_at", None) if scheduler else None)
-        or (getattr(scheduler, "scheduled_at", None) if scheduler else None)
-        or (getattr(plugin, "preparation_started_at", None) if plugin else None)
-        or (getattr(plugin, "submission_started_at", None) if plugin else None)
-        or (getattr(livy_info, "created_at", None) if livy_info else None)
-        or getattr(raw, "created_at", None)
+    submitted_at = _first_datetime(
+        _field(scheduler, "submitted_at"),
+        _field(scheduler, "scheduled_at"),
+        _field(plugin, "submission_started_at"),
+        _field(plugin, "preparation_started_at"),
+        _field(livy_info, "created_at"),
+        getattr(raw, "created_at", None),
     )
-    ended_at = (
-        (getattr(scheduler, "ended_at", None) if scheduler else None)
-        or (getattr(plugin, "cleanup_started_at", None) if plugin else None)
-        or (getattr(plugin, "monitoring_started_at", None) if plugin else None)
-        or (getattr(livy_info, "deleted_at", None) if livy_info else None)
+    accounting_start_at = _first_datetime(
+        _field(plugin, "resource_acquisition_started_at"),
+        _field(livy_info, "running_at"),
+        _field(livy_info, "idle_at"),
+        _field(livy_info, "busy_at"),
+        _field(plugin, "monitoring_started_at"),
+        _field(plugin, "submission_started_at"),
+        _field(scheduler, "scheduled_at"),
+        _field(scheduler, "submitted_at"),
+        _field(plugin, "preparation_started_at"),
+        _field(livy_info, "created_at"),
+        getattr(raw, "created_at", None),
+    )
+    accounting_start_basis = next(
+        (
+            basis for value, basis in (
+                (_field(plugin, "resource_acquisition_started_at"), "resource_acquisition_started_at"),
+                (_field(livy_info, "running_at"), "livy_running_at"),
+                (_field(livy_info, "idle_at"), "livy_idle_at"),
+                (_field(livy_info, "busy_at"), "livy_busy_at"),
+                (_field(plugin, "monitoring_started_at"), "monitoring_started_at"),
+                (_field(plugin, "submission_started_at"), "submission_started_at"),
+                (_field(scheduler, "scheduled_at"), "scheduled_at"),
+                (_field(scheduler, "submitted_at"), "submitted_at_fallback"),
+                (_field(plugin, "preparation_started_at"), "preparation_started_at_fallback"),
+                (_field(livy_info, "created_at"), "livy_created_at_fallback"),
+                (getattr(raw, "created_at", None), "created_at_fallback"),
+            )
+            if isinstance(value, datetime)
+        ),
+        None,
+    )
+    ended_at = _first_datetime(
+        _field(scheduler, "ended_at"),
+        _field(livy_info, "success_at"),
+        _field(livy_info, "dead_at"),
+        _field(livy_info, "shutting_down_at"),
+        _field(livy_info, "terminated_at"),
+        _field(livy_info, "error_at"),
+        _field(plugin, "cleanup_started_at"),
+        _field(livy_info, "deleted_at"),
     )
     duration_seconds: float | None = None
-    if submitted_at and ended_at:
-        duration_seconds = max(0.0, (ended_at - submitted_at).total_seconds())
+    if accounting_start_at and ended_at:
+        duration_seconds = max(
+            0.0,
+            (_utc(ended_at) - _utc(accounting_start_at)).total_seconds(),
+        )
 
     creation_req = getattr(livy_info, "job_creation_request", None) if livy_info else None
     app_info = getattr(raw, "app_info", None) or {}
+    if not isinstance(app_info, dict):
+        app_info = {}
     dc, ec, nx = vcore_shape_from_app_info(app_info, creation_req)
-    total_vcores, vcore_seconds = compute_vcore_seconds(dc, ec, nx, duration_seconds)
+    shape_is_estimate = False
+    if app_info and all(
+        _as_int(_mapping_value(app_info, *keys)) is not None
+        for keys in (
+            ("driverCores", "driver_cores"),
+            ("executorCores", "executor_cores"),
+            ("numExecutors", "num_executors", "executorCount"),
+        )
+    ):
+        shape_is_estimate = True
+    elif creation_req is not None and any(
+        _field(creation_req, field) is not None
+        for field in ("driver_cores", "executor_cores", "executor_count")
+    ):
+        shape_is_estimate = True
+    total_vcores, _ = compute_vcore_seconds(dc, ec, nx, 1.0)
+    if not shape_is_estimate:
+        total_vcores = None
+    _, vcore_seconds = compute_vcore_seconds(
+        dc, ec, nx, duration_seconds if shape_is_estimate else None,
+    )
     vcore_hours = (vcore_seconds / 3600.0) if vcore_seconds is not None else None
     est_cu_hours = (
         vcore_hours * VCORE_HOURS_TO_CU_HOURS if vcore_hours is not None else None
@@ -506,6 +595,8 @@ def _normalize(
         pool=pool,
         name=getattr(raw, "name", None),
         app_id=getattr(raw, "app_id", None),
+        app_info=app_info,
+        source_endpoint=livy_kind,  # type: ignore[arg-type]
         submitter_id=getattr(raw, "submitter_id", None),
         submitter_name=getattr(raw, "submitter_name", None),
         artifact_id=getattr(raw, "artifact_id", None),
@@ -513,6 +604,8 @@ def _normalize(
         result=str(result) if result else None,
         outcome=outcome,
         submitted_at=submitted_at,
+        accounting_start_at=accounting_start_at,
+        accounting_start_basis=accounting_start_basis,
         ended_at=ended_at,
         duration_seconds=duration_seconds,
         driver_cores=dc,
@@ -522,6 +615,11 @@ def _normalize(
         vcore_seconds=vcore_seconds,
         vcore_hours=vcore_hours,
         est_cu_hours_fabric_spark=est_cu_hours,
+        usage_basis=(
+            "fixed_shape_estimate"
+            if shape_is_estimate and total_vcores is not None
+            else "unknown"
+        ),
         pipeline_job_id=pipeline_job_id,
         activity_run_id=activity_run_id,
         activity_name=activity_name,
@@ -535,6 +633,7 @@ __all__ = [
     "VCORE_HOURS_TO_CU_HOURS",
     "vcore_shape_from_app_info",
     "compute_vcore_seconds",
+    "_overlaps_window",
     "_classify_trigger",
     "_classify_state",
     "_normalize",

@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from usma.modules.fabric_mapping.analyzer import FabricMappingAnalyzer
 from usma.modules.fabric_mapping.reporting import write_reports
 from usma.config import AppConfig, AzureConfig, SqlConfig
@@ -92,3 +94,31 @@ def test_fabric_mapping_picks_up_monitoring_findings(tmp_path: Path) -> None:
     titles = {r.title for r in report.recommendations}
     assert any("DWU" in t for t in titles)
     assert any("blocked by firewall" in t.lower() for t in titles)
+
+
+def test_spark_daily_average_survives_analysis_and_reports(tmp_path: Path) -> None:
+    (tmp_path / "spark_pools.json").write_text(json.dumps({
+        "collection_complete": True,
+        "accounting_warnings": ["Fixed-shape estimate, not measured allocation."],
+        "run_stats": [{
+            "pool": "p1", "kind": "scheduled",
+            "windows": [{
+                "window_days": 7, "est_cu_hours_fabric_spark": 16,
+                "known_usage_run_count": 1, "unknown_usage_run_count": 0,
+            }],
+        }],
+    }), encoding="utf-8")
+    report = FabricMappingAnalyzer(_cfg(tmp_path)).run()
+    cp = report.capacity_projection
+    assert cp is not None
+    assert cp.spark_steady_state_cu == pytest.approx(16 / 7 / 24)
+    assert cp.spark_daily_cu_hours == pytest.approx(16 / 7)
+    assert cp.spark_window_days == 7
+    assert any("Fixed-shape" in warning for warning in cp.spark_accounting_warnings)
+    write_reports(report, tmp_path, formats=["json", "markdown", "html"])
+    data = json.loads((tmp_path / "fabric_mapping.json").read_text(encoding="utf-8"))
+    assert data["capacity_projection"]["spark_steady_state_cu"] == cp.spark_steady_state_cu
+    for name in ("fabric_mapping.md", "fabric_mapping.html"):
+        text = (tmp_path / name).read_text(encoding="utf-8")
+        assert "Spark daily average" in text
+        assert "Fixed-shape estimate" in text

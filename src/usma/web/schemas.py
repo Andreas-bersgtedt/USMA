@@ -386,6 +386,7 @@ class EstateWorkspace(BaseModel):
     # Capacity / forecast (fabric_mapping)
     projected_fabric_cu: float | None = None
     recommended_fabric_sku: str | None = None
+    capacity_warnings: list[str] = Field(default_factory=list)
     # Spend / cost (cost module)
     actual_monthly_cost: float | None = None
     actual_currency: str | None = None

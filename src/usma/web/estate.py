@@ -140,6 +140,7 @@ class EstateIndex:
                 info_count=latest["info_count"],
                 tsql_compatibility_pct=latest["tsql_compatibility_pct"],
                 projected_fabric_cu=latest["projected_fabric_cu"],
+                capacity_warnings=latest["capacity_warnings"],
                 recommended_fabric_sku=latest["recommended_fabric_sku"],
                 actual_monthly_cost=latest["actual_monthly_cost"],
                 actual_currency=latest["actual_currency"],
@@ -375,6 +376,11 @@ def _extract_run(run_dir: Path) -> dict[str, Any] | None:
     snowflake_daily_cu = _snowflake_daily_cu(snowflake)
 
     dw_cu = capacity.get("estimated_cu")
+    # Modern projections already include pipeline compute and orchestration.
+    # Keep the separate fallback only for legacy DW-only projections.
+    additional_pipeline_cu = (
+        0.0 if dw_cu is not None and "pipelines_cu_contribution" in capacity else integration_daily_cu
+    )
     if (
         dw_cu is None
         and integration_daily_cu == 0.0
@@ -387,7 +393,7 @@ def _extract_run(run_dir: Path) -> dict[str, Any] | None:
     else:
         projected_fabric_cu = (
             float(dw_cu or 0.0)
-            + integration_daily_cu
+            + additional_pipeline_cu
             + databricks_daily_cu
             + databricks_sql_daily_cu
             + bigquery_daily_cu
@@ -475,6 +481,7 @@ def _extract_run(run_dir: Path) -> dict[str, Any] | None:
         "info_count": info_count,
         "tsql_compatibility_pct": readiness.get("tsql_compatibility_pct"),
         "projected_fabric_cu": projected_fabric_cu,
+        "capacity_warnings": capacity.get("spark_accounting_warnings") or [],
         "projected_fabric_cu_dw": capacity.get("estimated_cu"),
         "projected_fabric_cu_pipelines": integration_daily_cu or None,
         "recommended_fabric_sku": recommended_sku,

@@ -180,16 +180,25 @@ pools returned run history.
 
 | Stat card                | Source                                                 |
 | ------------------------ | ------------------------------------------------------ |
-| **vCore-hours / day**    | `Σ run_history.daily_vcore_hours / N`                  |
-| **Active pools**         | distinct pools with runs in the window                 |
-| **Success rate**         | succeeded / (succeeded + failed) across all pools      |
+| **Spark runs**           | Unique collected application observations in the selected common window |
+| **Spark compute**        | Estimated vCore-hours, with average vCore-hours/day |
+| **Est. Fabric capacity** | Estimated CU-hours; steady-state CU = total CU-hours / observation days / 24 |
 
-Two stacked-bar charts render side-by-side:
+The Spark contribution to the SKU recommendation uses this same daily-average
+baseline, then applies the recommendation's headroom. Peak-day demand is a
+separate diagnostic, not the steady-state calculation. Observed zero-usage days
+are included. Incomplete collection and unknown consumption withhold the Spark
+steady-state contribution rather than being treated as evidence of zero activity.
 
-- **Daily vCore-hours (28 days)** — per-pool stacked daily totals.
-- **Hourly vCore-hours (last 24h)** — 24 bins anchored to the top of
-  the current local hour, per-pool stacked, sharing the same palette
-  as the daily chart.
+New payloads include observation dates and accounting provenance. Livy shapes
+are estimates, not measured historical allocation: requested or reserved
+executors can exceed actual allocation. Historical payloads remain usable but
+carry a coverage/accounting caveat. Re-run collection for corrected accounting.
+
+Daily and hourly charts show resource-time estimates across their time bins;
+new daily totals use the backend's UTC accounting. See
+[Spark accounting](../spark-accounting.md) for formulas, duplicate handling,
+window boundaries, limitations and Microsoft documentation.
 
 ### Serverless SQL section
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 
 from ...config import AppConfig
 from ...errors import format_error
@@ -12,7 +12,12 @@ from ...progress import NullProgress, ProgressReporter
 from .arm_client import SparkArmClient
 from .artifacts_client import SparkArtifactsClient
 from .spark_history_client import SparkHistoryClient
-from .spark_run_stats import aggregate_runs
+from .spark_run_stats import (
+    DEFAULT_WINDOWS,
+    aggregate_daily_usage,
+    aggregate_runs,
+    deduplicate_runs,
+)
 from . import notebook_lint, runtime_compat
 from .models import (
     NotebookLintFinding,
@@ -138,7 +143,29 @@ class SparkPoolsAnalyzer:
             limit = _env_int("SMA_SPARK_RUN_LIMIT", default=50000, minimum=1)
             page_size = _env_int("SMA_SPARK_RUN_PAGE_SIZE", default=20, minimum=1)
             concurrency = _env_int("SMA_SPARK_RUN_CONCURRENCY", default=4, minimum=1)
-            start = datetime.now(timezone.utc) - timedelta(days=days)
+            collection_end = datetime.now(timezone.utc)
+            observation_end = datetime.combine(
+                collection_end.date(), time.min, tzinfo=timezone.utc,
+            )
+            observation_start = observation_end - timedelta(days=days)
+            start = observation_start
+            result.observation_start = observation_start
+            result.observation_end = observation_end
+            result.accounting_basis = (
+                "fixed_shape_estimate_from_livy_history; "
+                "no executor allocation timeline is exposed by the current API"
+            )
+            result.accounting_warnings.append(
+                "vCore-hours and Fabric Spark CU-hours are fixed-shape estimates "
+                "using Livy application shape and lifecycle timestamps, not measured "
+                "allocation or billed usage."
+            )
+            result.accounting_warnings.append(
+                "Current Livy history does not expose executor allocation history or "
+                "shared-instance attribution; actual dynamic allocation and shared "
+                "instance usage cannot be inferred. Reserved maximums are not actual "
+                "allocation telemetry and are not treated as measured usage."
+            )
             history = SparkHistoryClient(self._cfg.azure)
             collected: list[SparkRunRecord] = []
 
@@ -189,11 +216,52 @@ class SparkPoolsAnalyzer:
                         except Exception as exc:  # noqa: BLE001
                             log.warning("spark history fetch failed: %s", exc)
                             result.errors.append(format_error("spark_history", exc))
-                result.spark_runs = collected
-                result.run_stats = aggregate_runs(collected)
+                result.spark_runs = deduplicate_runs(collected)
+                statuses = [
+                    history.collection_status(pool_name, endpoint)
+                    for pool_name in pool_names
+                    for endpoint in ("batch", "session")
+                ]
+                result.collection_complete = (
+                    all(status is True for status in statuses)
+                    and not any("spark_history" in err for err in result.errors)
+                )
+                result.run_stats = aggregate_runs(
+                    result.spark_runs,
+                    now=observation_end,
+                    windows=tuple(window for window in DEFAULT_WINDOWS if window <= days)
+                    or (days,),
+                    collection_complete=result.collection_complete,
+                    groups=(
+                        (pool_name, kind)
+                        for pool_name in pool_names
+                        for kind in ("scheduled", "interactive")
+                    ),
+                )
+                if result.collection_complete:
+                    result.daily_usage = aggregate_daily_usage(
+                        result.spark_runs,
+                        start=observation_start,
+                        end=observation_end,
+                    )
+                else:
+                    result.accounting_warnings.append(
+                        "Spark history collection was incomplete or could not be "
+                        "verified; daily totals and steady-state sizing may omit usage."
+                    )
+                if any(
+                    window.unknown_usage_run_count > 0
+                    for pool_stats in result.run_stats
+                    for window in pool_stats.windows
+                ):
+                    result.accounting_warnings.append(
+                        "One or more overlapping Spark runs lack a usable application "
+                        "shape or lifecycle interval; their usage is unknown, not zero."
+                    )
             except Exception as exc:  # noqa: BLE001
                 log.warning("spark_history aggregation failed: %s", exc)
                 result.errors.append(format_error("spark_history", exc))
+                result.collection_complete = False
         self._progress.step(label="spark_history")
 
         return result

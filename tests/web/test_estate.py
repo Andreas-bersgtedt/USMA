@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from usma.web import create_app
@@ -161,6 +162,30 @@ def _make_run(
 def _id(prefix: str, suffix: str) -> str:
     # The repo enforces "YYYYMMDDTHHMMSSZ-xxxxxxxx".
     return f"{prefix}-{suffix}"
+
+
+@pytest.mark.parametrize("modern, expected", [(True, 12.0), (False, 13.0)])
+def test_estate_does_not_add_pipeline_cu_twice(tmp_path: Path, modern: bool, expected: float) -> None:
+    runs_dir = tmp_path / "runs"
+    run_dir = _make_run(
+        runs_dir, run_id=_id("20260928T120000Z", "aaaaaaaa"), workspace_name="ws",
+    )
+    if modern:
+        path = run_dir / "fabric_mapping.json"
+        fm = json.loads(path.read_text(encoding="utf-8"))
+        fm["capacity_projection"]["pipelines_cu_contribution"] = 1.3
+        fm["capacity_projection"]["spark_cu_contribution"] = 2.6
+        fm["capacity_projection"]["spark_accounting_warnings"] = ["Incomplete Spark history."]
+        path.write_text(json.dumps(fm), encoding="utf-8")
+    (run_dir / "pipelines.json").write_text(json.dumps({
+        "run_history": {"by_pipeline": [{
+            "windows": [{"window_days": 7, "est_cu_hours_from_diu": 168}],
+        }]},
+    }), encoding="utf-8")
+    report = EstateIndex(FilesystemRunRepo(runs_dir)).build()
+    assert report.workspaces[0].projected_fabric_cu == expected
+    assert report.totals.projected_fabric_cu_total == expected
+    assert report.workspaces[0].capacity_warnings == (["Incomplete Spark history."] if modern else [])
 
 
 def test_estate_index_groups_workspaces_and_picks_latest_ok(tmp_path: Path) -> None:
