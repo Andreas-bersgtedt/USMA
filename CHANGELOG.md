@@ -6,6 +6,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.5.0] - 2026-09-28
+
+### Fixed
+- Synapse Spark capacity projection now uses total estimated CU-hours divided
+  by observation days and 24 for steady-state CU, summing all pool/trigger
+  groups in one common window. Peak-day demand remains a separate diagnostic;
+  historical payloads no longer receive the artificial half-window uplift.
+- Spark history accounting removes repeated application observations, preserves
+  independent endpoint identities, clips overlapping runs to the observation
+  window and apportions resource-time across UTC days. Lifecycle timing no
+  longer treats entry into monitoring as an execution end.
+- Estate capacity totals no longer add pipeline consumption a second time when
+  it is already included in the combined capacity projection.
+
+### Added
+- Spark accounting provenance, observation/collection coverage and unknown-usage
+  warnings in analysis and reports. Fixed-shape Livy estimates are distinguished
+  from measured allocation; missing historical allocation is not presented as
+  exact billed usage. Incomplete collection or unknown consumption withholds
+  Spark steady-state sizing. See [Spark accounting](docs/spark-accounting.md).
+- Regression coverage for Spark daily-average sizing, duplicate observations,
+  runtime/window boundaries and estate component accounting.
+
 ## [5.4.0] - 2026-06-11
 
 ### Added

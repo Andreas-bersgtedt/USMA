@@ -1,6 +1,8 @@
 """Tests for the Fabric capacity (CU) projection."""
 from datetime import datetime, timezone
 
+import pytest
+
 from usma.modules.fabric_mapping import cu_projection
 
 
@@ -38,8 +40,7 @@ def test_returns_projection_from_spark_alone():
     """When the dedicated SQL pool isn't migrated yet but Spark Livy
     history is collected, the recommended SKU should still cover Spark.
 
-    Sizing is driven by the busiest UTC day inside the window (Fabric's
-    capacity smoothing window is 24h)."""
+    Steady state uses the average of all days, including zero-usage days."""
     spark = {
         "run_stats": [{
             "pool": "p1", "kind": "scheduled",
@@ -52,10 +53,10 @@ def test_returns_projection_from_spark_alone():
     }
     proj = cu_projection.project_capacity([], spark_payload=spark, headroom_pct=30)
     assert proj is not None
-    # peak day 1200 CU-hr / 24h = 50 CU sustained. * 1.3 → 65 CU → F128.
-    assert proj.spark_cu_contribution == 65.0
+    assert proj.spark_steady_state_cu == pytest.approx(1200 / 7 / 24)
+    assert proj.spark_cu_contribution == 9.29
     assert proj.dwu_cu_contribution == 0.0
-    assert proj.recommended_sku == "F128"
+    assert proj.recommended_sku == "F16"
 
 
 def test_combines_dwu_spark_and_pipelines():
@@ -102,9 +103,7 @@ def test_combines_dwu_spark_and_pipelines():
 
 
 def test_legacy_payload_without_peak_day_falls_back():
-    """Pre-v2.6.3 spark_pools.json has no ``peak_day_cu_hours``. The
-    projection should still produce a sensible (conservative) number by
-    estimating the peak day as roughly twice the window average."""
+    """Historical totals use the same average, with an explicit caveat."""
     spark = {
         "run_stats": [{
             "pool": "p1", "kind": "scheduled",
@@ -117,9 +116,122 @@ def test_legacy_payload_without_peak_day_falls_back():
     }
     proj = cu_projection.project_capacity([], spark_payload=spark, headroom_pct=30)
     assert proj is not None
-    # Fallback peak-day = 1680 / (7/2) = 480 CU-hr → 20 CU → *1.3 = 26 CU → F32.
-    assert proj.spark_cu_contribution == 26.0
-    assert proj.recommended_sku == "F32"
+    assert proj.spark_cu_contribution == 13.0
+    assert proj.recommended_sku == "F16"
+    assert any("Historical" in warning for warning in proj.spark_accounting_warnings)
+
+
+def _spark_entry(pool, kind="scheduled", days=7, total=16):
+    return {
+        "pool": pool, "kind": kind,
+        "windows": [{
+            "window_days": days, "est_cu_hours_fabric_spark": total,
+            "known_usage_run_count": 1, "unknown_usage_run_count": 0,
+        }],
+    }
+
+
+def test_spark_sums_pools_and_trigger_kinds_with_one_common_denominator():
+    spark = {"run_stats": [
+        _spark_entry("p1"), _spark_entry("p1", "interactive"), _spark_entry("p2"),
+    ]}
+    proj = cu_projection.project_capacity([], spark_payload=spark, headroom_pct=0)
+    assert proj.spark_daily_cu_hours == pytest.approx(48 / 7)
+    assert proj.spark_steady_state_cu == pytest.approx(48 / 7 / 24)
+    assert proj.spark_peak_day_cu_hours is None
+
+
+def test_spark_does_not_sum_overlapping_windows():
+    entry = _spark_entry("p1")
+    entry["windows"].append({"window_days": 28, "est_cu_hours_fabric_spark": 64})
+    proj = cu_projection.project_capacity([], spark_payload={"run_stats": [entry]}, headroom_pct=0)
+    assert proj.spark_steady_state_cu == pytest.approx(16 / 7 / 24)
+
+
+def test_spark_incompatible_windows_do_not_produce_a_mixed_average(caplog):
+    spark = {"run_stats": [_spark_entry("p1"), _spark_entry("p2", days=28)]}
+    assert cu_projection.project_capacity([], spark_payload=spark) is None
+    assert "no common observation window" in caplog.text
+
+
+def test_spark_uses_shortest_common_window_when_seven_days_unavailable():
+    spark = {"run_stats": [_spark_entry("p1", days=3), _spark_entry("p2", days=3)]}
+    proj = cu_projection.project_capacity([], spark_payload=spark, headroom_pct=0)
+    assert proj.spark_window_days == 3
+    assert proj.spark_steady_state_cu == pytest.approx(32 / 3 / 24)
+
+
+def test_spark_peak_is_separate_and_combines_matching_dates_only():
+    spark = {
+        "run_stats": [_spark_entry("p1"), _spark_entry("p2")],
+        "observation_end": "2026-09-28T00:00:00Z",
+        "collection_complete": True,
+        "daily_usage": [
+            {"day": "2026-09-21", "est_cu_hours_fabric_spark": 8},
+            {"day": "2026-09-21", "est_cu_hours_fabric_spark": 16},
+            {"day": "2026-09-22", "est_cu_hours_fabric_spark": 8},
+            {"day": "2026-09-20", "est_cu_hours_fabric_spark": 1000},
+            {"day": "2026-09-28", "est_cu_hours_fabric_spark": 1000},
+        ],
+    }
+    proj = cu_projection.project_capacity([], spark_payload=spark, headroom_pct=30)
+    assert proj.spark_peak_day_cu_hours == 24
+    assert proj.spark_steady_state_cu == pytest.approx(32 / 7 / 24)
+    assert proj.spark_cu_contribution == round(32 / 7 / 24 * 1.3, 2)
+
+
+def test_incomplete_and_unknown_usage_are_exposed():
+    entry = _spark_entry("p1")
+    entry["windows"][0]["unknown_usage_run_count"] = 2
+    proj = cu_projection.project_capacity(
+        [], pipelines_payload={"run_history": {"by_pipeline": [{
+            "windows": [{"window_days": 7, "peak_day_cu_hours": 24}],
+        }]}}, spark_payload={
+        "run_stats": [entry], "collection_complete": False,
+        "accounting_warnings": ["Fixed-shape estimate, not measured allocation."],
+    })
+    assert proj.spark_cu_contribution == 0
+    assert proj.estimated_cu == proj.pipelines_cu_contribution
+    assert any("incomplete" in w for w in proj.spark_accounting_warnings)
+    assert any("unknown consumption" in w for w in proj.spark_accounting_warnings)
+    assert any("Fixed-shape" in w for w in proj.spark_accounting_warnings)
+
+
+@pytest.mark.parametrize("incomplete,unknown", [(True, 0), (False, 1)])
+def test_partial_spark_only_cannot_produce_a_capacity_recommendation(incomplete, unknown, caplog):
+    entry = _spark_entry("p1")
+    entry["windows"][0]["unknown_usage_run_count"] = unknown
+    assert cu_projection.project_capacity([], spark_payload={
+        "run_stats": [entry], "collection_complete": not incomplete,
+    }) is None
+    assert "Spark steady-state sizing unavailable" in caplog.text
+
+
+@pytest.mark.parametrize("total", [-1, float("nan"), float("inf")])
+def test_invalid_spark_totals_raise(total):
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        cu_projection.project_capacity([], spark_payload={"run_stats": [_spark_entry("p1", total=total)]})
+
+
+@pytest.mark.parametrize("missing", ["coverage", "average", "steady_state", "unknown_count"])
+def test_new_contract_requires_coverage_and_available_averages(missing):
+    entry = _spark_entry("p1")
+    window = entry["windows"][0]
+    window.update(avg_daily_cu_hours=16 / 7, steady_state_cu=16 / 7 / 24)
+    payload = {
+        "accounting_basis": "fixed_shape_estimate",
+        "collection_complete": True, "run_stats": [entry],
+    }
+    assert cu_projection.project_capacity([], spark_payload=payload) is not None
+    if missing == "coverage":
+        payload["collection_complete"] = None
+    else:
+        key = {
+            "average": "avg_daily_cu_hours", "steady_state": "steady_state_cu",
+            "unknown_count": "unknown_usage_run_count",
+        }[missing]
+        window[key] = None
+    assert cu_projection.project_capacity([], spark_payload=payload) is None
 
 
 def test_returns_none_when_all_components_zero():

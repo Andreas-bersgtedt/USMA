@@ -23,7 +23,7 @@ Python tooling that inventories and analyzes **data integration estates** to ass
 > Modules:
 > - `dedicated_pools` — **Synapse only.** Dedicated SQL pool inventory, schema/table/index/usage/security/workload-management, T-SQL code-object capture, column-level collation audit, materialized-view inventory, statistics-freshness report, column stats, distribution-key advisor (skew + filter-selectivity heuristics), and a per-object "T-SQL surface gaps" rollup with stable code-object ids
 > - `serverless_pools` — **Synapse only.** Built-in serverless SQL pool, databases, external data sources & external tables, top queries, daily data-scanned, cost estimate
-> - `spark_pools` — **Synapse only.** Apache Spark pool inventory & configuration, plus notebook and Spark-job-definition inventory
+> - `spark_pools` — **Synapse only.** Apache Spark pool, notebook and Spark-job-definition inventory, plus deduplicated application resource-time estimates and daily-average Fabric steady-state sizing with coverage warnings. See [Spark accounting](docs/spark-accounting.md) for formulas and allocation limits.
 > - `pipelines` — **Cross-source (Synapse + ADF).** Pipelines, linked services, datasets, triggers, integration runtimes, with activity-level Fabric-compatibility classification, plus rolling 7/14/28/90-day **run-history statistics** (executions, success rate, avg duration, avg MB moved per Copy/Dataflow run, plus runtime-derived vCore-hours per Mapping-Dataflow run from `compute.coreCount` × `executionDuration`, projected to Fabric CU-hours)
 > - `databricks_workflows` — **Databricks only** (alpha). Workflows (jobs), tasks (Notebook / SQL / JAR / Python wheel / dbt / Run Job), schedules, job clusters, and **SQL warehouses** (inventory, query history, REST CPU-seconds, Unity Catalog `system.billing` DBU usage, plus a per-warehouse Fabric F-SKU mapping that rolls up into the Dashboard headline and the Estate Overview), normalized into the same wire format that feeds `fabric_mapping`.
 > - `bigquery_workloads` — **BigQuery only** (alpha). Datasets, tables (`TABLE` / `VIEW` / `MATERIALIZED_VIEW` / `EXTERNAL` / `SNAPSHOT`), routines (UDFs / stored procs / table functions), scheduled queries (Data Transfer Service), and completed jobs from Cloud Logging audit entries — with `total_slot_ms` rolled up into 7/14/28/90-day windows and converted to Fabric Spark CU-hours via the documented slot-ratio caveat.
@@ -386,4 +386,3 @@ trademarks of Microsoft Corporation. This project is an independent, community-d
 tool and is **not affiliated with, endorsed by, or sponsored by Microsoft**. The MIT
 license covers only the source code in this repository; it does not grant any rights
 to use Microsoft trademarks.
-

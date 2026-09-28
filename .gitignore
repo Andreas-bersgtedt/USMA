@@ -27,6 +27,7 @@ htmlcov/
 output/
 reports/
 *.log
+/devplan/
 
 .pytest-tmp/
 

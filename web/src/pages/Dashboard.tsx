@@ -21,8 +21,23 @@ import EstateSummaryCard, { type EstateSummaryEntry } from "../components/Estate
 import ScopeFilter, { matchesScope, useScopeFilter } from "../components/ScopeFilter";
 import type { SourceTypeId } from "../components/sourceTypes";
 import { areaLabel, effortLabel, moduleLabel, sourceLabel, sourceNoun } from "../lib/labels";
+import {
+  aggregateSparkWindow,
+  buildSparkDailyChartData,
+  buildSparkHourlyUsage,
+  getSparkSizingStatus,
+  selectCommonSparkWindowDays,
+  sparkObservationWindowDays,
+} from "../lib/sparkAccounting";
 import { useMemo } from "react";
-import type { PipelinesReport, Recommendation, Severity, ModuleSummary } from "../types";
+import type {
+  PipelinesReport,
+  Recommendation,
+  Severity,
+  ModuleSummary,
+  SparkPoolsReport,
+  SparkRunRecord,
+} from "../types";
 
 /**
  * Phase 3 — Pipelines is the cross-source module (both Synapse and ADF
@@ -181,7 +196,14 @@ export default function Dashboard() {
     fm
       || (storage && (storage.dedicated_pool_storage?.length || storage.accounts?.length || storage.capacities?.length))
       || pipelinesEntries.some((e) => e.payload?.run_history && e.payload.run_history.by_pipeline?.length)
-      || (sparkPools && (sparkPools.pools?.length || sparkPools.run_stats?.length || sparkPools.spark_runs?.length))
+      || (sparkPools && (
+        sparkPools.pools?.length ||
+        sparkPools.run_stats?.length ||
+        sparkPools.spark_runs?.length ||
+        sparkPools.daily_usage?.length ||
+        sparkPools.accounting_warnings?.length ||
+        sparkPools.collection_complete === false
+      ))
       || (dbx && ((dbx.workflows?.length ?? 0) || (dbx.workflow_run_stats?.length ?? 0) || (dbx.interactive_cluster_usage?.length ?? 0)))
       || (bq && ((bq.jobs?.length ?? 0) || (bq.daily_stats?.length ?? 0) || (bq.tables?.length ?? 0)))
       || (serverless && (serverless.databases?.length || serverless.daily_usage?.length))
@@ -271,24 +293,34 @@ export default function Dashboard() {
     return (totalCuHr / window) / 24;
   })();
 
-  // Steady-state CU from Spark Livy job history (notebook sessions + scheduled
-  // batches). vCore-hours are already converted to Fabric CU-hours by the
-  // analyzer using the documented 1 CU = 2 Spark vCores rate, so we just sum
-  // the per-pool / per-kind 7-day window totals.
-  const sparkDailyCu = (() => {
-    const stats = sparkPools?.run_stats;
-    if (!stats || stats.length === 0) return 0;
-    let totalCuHr = 0;
-    let window = 0;
-    for (const s of stats) {
-      const w = s.windows.find((w) => w.window_days === 7) ?? s.windows[0];
-      if (!w) continue;
-      totalCuHr += w.est_cu_hours_fabric_spark ?? 0;
-      window = w.window_days;
-    }
-    if (window <= 0) return 0;
-    return (totalCuHr / window) / 24;
-  })();
+  // Spark summaries use one shared observation window across all groups.
+  // The projection's unbuffered backend value is preferred for the SKU
+  // fallback, with the common-window run statistics retained for older runs.
+  const sparkStats = sparkPools?.run_stats ?? [];
+  const sparkWindowDays = selectCommonSparkWindowDays(sparkStats);
+  const sparkTotals = aggregateSparkWindow(
+    sparkStats,
+    sparkWindowDays ?? undefined,
+    !sparkPools?.accounting_basis,
+  );
+  const sparkSizingCu = cp?.spark_steady_state_cu !== undefined
+    ? cp.spark_steady_state_cu
+    : sparkTotals?.steadyStateCu ?? null;
+  const sparkSizing = !sparkPools && cp?.spark_steady_state_cu === undefined
+    ? { included: true, warning: null }
+    : getSparkSizingStatus({
+        accountingBasis: sparkPools?.accounting_basis,
+        collectionComplete: sparkPools?.collection_complete,
+        unknownUsageRunCount: sparkTotals?.unknownUsageRunCount ?? null,
+        avgDailyCuHours: sparkTotals?.avgDailyCuHours ?? null,
+        steadyStateCu: sparkSizingCu,
+      });
+  const hasSparkUsage = Boolean(
+    sparkPools?.run_stats?.length ||
+    sparkPools?.daily_usage?.length ||
+    sparkPools?.spark_runs?.length,
+  );
+  const sparkDailyCu = sparkSizing.included ? sparkSizingCu ?? 0 : 0;
 
   return (
     <>
@@ -381,7 +413,12 @@ export default function Dashboard() {
                     return v.toFixed(1);
                   };
                   const dwuCu = cp.dwu_cu_contribution ?? 0;
-                  const sparkCu = cp.spark_cu_contribution ?? 0;
+                  const sparkCu = sparkSizing.included
+                    ? cp.spark_cu_contribution ?? 0
+                    : 0;
+                  const sparkBaseCu = sparkSizing.included
+                    ? sparkSizingCu
+                    : null;
                   const pipeCu = cp.pipelines_cu_contribution ?? 0;
                   const slessCu = cp.serverless_cu_contribution ?? 0;
                   const slessPeakDayCuH = cp.serverless_peak_day_cu_hours ?? 0;
@@ -394,7 +431,25 @@ export default function Dashboard() {
                   const slessNote = slessPeakDayCuH > 0
                     ? ` · Serverless peak day ≈ ${slessPeakDayCuH.toFixed(2)} CU-h (smoothed over 24 h)`
                     : "";
-                  return `${cp.estimated_cu.toFixed(1)} CU (${cp.headroom_pct}% headroom)${breakdown}${slessNote}`;
+                  const sparkNote = sparkBaseCu != null && sparkBaseCu > 0
+                    ? ` · Spark steady-state ${fmtCu(sparkBaseCu)} CU before headroom` +
+                      (cp.spark_daily_cu_hours != null && cp.spark_window_days != null
+                        ? ` from ${cp.spark_daily_cu_hours.toFixed(2)} CU-h/day over ${cp.spark_window_days}d`
+                        : "")
+                    : "";
+                  const sparkPeakNote = cp.spark_peak_day_cu_hours != null
+                    ? ` · Spark peak day ${cp.spark_peak_day_cu_hours.toFixed(2)} CU-h (diagnostic)`
+                    : "";
+                  const sparkWarnings = Array.from(new Set([
+                    ...(cp.spark_accounting_warnings ?? []),
+                    ...(hasSparkUsage && sparkSizing.warning
+                      ? [sparkSizing.warning]
+                      : []),
+                  ]));
+                  const sparkWarning = sparkWarnings.length > 0
+                    ? ` · ${sparkWarnings.join(" · ")}`
+                    : "";
+                  return `${cp.estimated_cu.toFixed(1)} CU (${cp.headroom_pct}% headroom)${breakdown}${sparkNote}${sparkPeakNote}${slessNote}${sparkWarning}`;
                 })()
               : databricksSqlRolledSku
                 ? (() => {
@@ -407,14 +462,18 @@ export default function Dashboard() {
                     }
                     return parts.join(" · ");
                   })()
-                : integrationDailyCu > 0 || sparkDailyCu > 0
+                : integrationDailyCu > 0 || sparkDailyCu > 0 || (hasSparkUsage && sparkSizing.warning)
                   ? `no monitoring data${
                       integrationDailyCu > 0
                         ? ` · ${integrationDailyCu.toFixed(2)} CU/day from pipelines`
                         : ""
                     }${
                       sparkDailyCu > 0
-                        ? ` · ${sparkDailyCu.toFixed(2)} CU/day from Spark`
+                        ? ` · ${sparkDailyCu.toFixed(2)} steady-state CU from Spark`
+                        : ""
+                    }${
+                      hasSparkUsage && sparkSizing.warning
+                        ? ` · ${sparkSizing.warning}`
                         : ""
                     }`
                   : "no monitoring data"
@@ -477,7 +536,11 @@ export default function Dashboard() {
             scope={e.scope}
           />
         ))}
-      <SparkPoolsSection sparkPools={sparkPools} runMeta={runMeta} />
+      <SparkPoolsSection
+        sparkPools={sparkPools}
+        runMeta={runMeta}
+        projectionWarnings={cp?.spark_accounting_warnings ?? []}
+      />
       <DatabricksWorkflowsSection databricks={dbx} runMeta={runMeta} />
       <BigQueryWorkloadsSection bq={bq} runMeta={runMeta} />
       <SnowflakeWorkloadsSection snow={snow} runMeta={runMeta} />
@@ -2496,20 +2559,112 @@ function DatabricksWorkflowsSection({
   );
 }
 
-function SparkPoolsSection({ sparkPools, runMeta }: { sparkPools: import("../types").SparkPoolsReport | null; runMeta?: import("../api/loader").RunMeta | null }) {
+function SparkAccountingMetadata({
+  report,
+  projectionWarnings = [],
+}: {
+  report: SparkPoolsReport;
+  projectionWarnings?: string[];
+}) {
+  const basis = report.accounting_basis?.trim() || "legacy basis metadata unavailable";
+  const isFixedShape = /fixed.?shape|shape.?estimate/i.test(basis);
+  const warnings = Array.from(new Set([
+    ...(report.accounting_warnings ?? []),
+    ...projectionWarnings,
+  ]));
+  const coverage =
+    report.collection_complete === true
+      ? "complete"
+      : report.collection_complete === false
+        ? "incomplete"
+        : "unknown (legacy or unavailable coverage metadata)";
+
+  if (
+    report.collection_complete !== true &&
+    !warnings.some((warning) => /coverage|missing telem/i.test(warning))
+  ) {
+    warnings.push(
+      report.collection_complete === false
+        ? "Spark history collection is incomplete; missing telemetry is not zero usage."
+        : "Collection coverage is unknown; missing telemetry must not be interpreted as zero usage.",
+    );
+  }
+
+  return (
+    <div className="small muted" style={{ marginTop: 8 }}>
+      <div>
+        <strong>Accounting basis:</strong>{" "}
+        {isFixedShape
+          ? "fixed-shape estimate (recorded driver/executor shape multiplied by runtime; not measured billing)"
+          : "resource-time estimate; not a Synapse billing measurement"}{" "}
+        <code>{basis}</code>
+      </div>
+      <div>
+        <strong>Observation period:</strong>{" "}
+        {report.observation_start ?? "unknown"} – {report.observation_end ?? "unknown"}
+        {" · "}
+        <strong>Collection coverage:</strong> {coverage}
+      </div>
+      <div>
+        Fabric Spark sizing assumption: 0.5 estimated CU-hours per accounted
+        vCore-hour (1 CU = 2 Spark vCores); this does not establish equal
+        performance or billed consumption.
+      </div>
+      {warnings.length > 0 && (
+        <ul style={{ margin: "4px 0 0", paddingLeft: 20 }}>
+          {warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function SparkPoolsSection({
+  sparkPools,
+  runMeta,
+  projectionWarnings = [],
+}: {
+  sparkPools: SparkPoolsReport | null;
+  runMeta?: import("../api/loader").RunMeta | null;
+  projectionWarnings?: string[];
+}) {
   if (!sparkPools) return null;
   const stats = sparkPools.run_stats ?? [];
   const pools = sparkPools.pools ?? [];
   const errors = sparkPools.errors ?? [];
+  const runs = sparkPools.spark_runs ?? [];
   const sparkHistoryErrors = errors.filter((e) => e.includes("spark_history"));
+  const windowDays = selectCommonSparkWindowDays(stats);
+  const totals = aggregateSparkWindow(
+    stats,
+    windowDays ?? undefined,
+    !sparkPools.accounting_basis,
+  );
+  const sparkSizing = getSparkSizingStatus({
+    accountingBasis: sparkPools.accounting_basis,
+    collectionComplete: sparkPools.collection_complete,
+    unknownUsageRunCount: totals?.unknownUsageRunCount ?? null,
+    avgDailyCuHours: totals?.avgDailyCuHours ?? null,
+    steadyStateCu: totals?.steadyStateCu ?? null,
+  });
+  const dailyWindowDays = windowDays ?? sparkObservationWindowDays(
+    sparkPools.observation_start,
+    sparkPools.observation_end,
+  );
+  const hasCanonicalDailyUsage = Array.isArray(sparkPools.daily_usage);
+  const hasDailyUsage = (sparkPools.daily_usage?.length ?? 0) > 0;
 
   // Render an explicit "no data" diagnostic panel when pools exist but the
   // Livy history collection produced no rows. This is much better UX than
   // silently dropping the section — it tells the user WHY there are no
   // Spark execution stats (typically a 403 on bigDataPools/useCompute/action,
   // or the SMA_SPARK_RUN_HISTORY env-var being disabled).
-  if (stats.length === 0) {
-    if (pools.length === 0) return null;
+  if (stats.length === 0 && !hasDailyUsage) {
+    if (pools.length === 0 && runs.length === 0 &&
+        sparkHistoryErrors.length === 0 &&
+        sparkPools.collection_complete !== false &&
+        (sparkPools.accounting_warnings?.length ?? 0) === 0 &&
+        projectionWarnings.length === 0) return null;
     return (
       <section className="section">
         <h2>Spark execution</h2>
@@ -2561,11 +2716,20 @@ function SparkPoolsSection({ sparkPools, runMeta }: { sparkPools: import("../typ
             <code>SMA_SPARK_RUN_DAYS</code> (default 90).
           </div>
         )}
+        <SparkAccountingMetadata report={sparkPools} projectionWarnings={projectionWarnings} />
+        {(hasCanonicalDailyUsage || runs.length > 0) && (
+          <SparkDailyBars
+            runs={runs}
+            dailyUsage={sparkPools.daily_usage}
+            observationEnd={sparkPools.observation_end}
+            windowDays={dailyWindowDays}
+          />
+        )}
       </section>
     );
   }
 
-  // Prefer the 7-day window; fall back to the shortest available.
+  // A single common window prevents adding totals with different denominators.
   // Aggregate per-pool. The interactive-vs-scheduled trigger dimension
   // is not displayed: Synapse Studio's Livy telemetry doesn't expose a
   // 100%-reliable discriminator for all run types (the `spark.synapse
@@ -2583,19 +2747,18 @@ function SparkPoolsSection({ sparkPools, runMeta }: { sparkPools: import("../typ
     durationHours: number;
     vcoreHours: number;
     cuHours: number;
-    windowDays: number;
   };
   const perPool: PerPool[] = (() => {
+    if (windowDays == null) return [];
     const byPool = new Map<string, PerPool>();
     for (const s of stats) {
-      const w = s.windows.find((x) => x.window_days === 7) ?? s.windows[0];
+      const w = s.windows.find((x) => x.window_days === windowDays);
       if (!w) continue;
       let row = byPool.get(s.pool);
       if (!row) {
         row = {
           pool: s.pool, runs: 0,
           durationHours: 0, vcoreHours: 0, cuHours: 0,
-          windowDays: w.window_days,
         };
         byPool.set(s.pool, row);
       }
@@ -2606,43 +2769,46 @@ function SparkPoolsSection({ sparkPools, runMeta }: { sparkPools: import("../typ
     }
     return Array.from(byPool.values());
   })();
-  if (perPool.length === 0) return null;
-
-  const window = perPool[0].windowDays;
-  const totalRuns = perPool.reduce((s, r) => s + r.runs, 0);
-  const totalDurationHours = perPool.reduce((s, r) => s + r.durationHours, 0);
-  const totalVcoreHours = perPool.reduce((s, r) => s + r.vcoreHours, 0);
-  const totalCuHours = perPool.reduce((s, r) => s + r.cuHours, 0);
-  const dailyCuHours = window > 0 ? totalCuHours / window : 0;
-  const dailyCuEquivalent = dailyCuHours / 24;
+  const window = totals?.windowDays ?? 0;
+  const totalRuns = totals?.runCount ?? 0;
+  const totalDurationHours = totals?.durationHours ?? 0;
+  const totalVcoreHours = totals?.vcoreHours ?? 0;
+  const totalCuHours = totals?.cuHours ?? 0;
 
   // Sort by CU-hours desc (largest consumer first).
   const top = [...perPool].sort((a, b) => b.cuHours - a.cuHours);
 
   return (
     <section className="section">
-      <h2>Spark execution (last {window} days)<ProvenanceBadge meta={runMeta ?? null} module="spark_pools" /><ReanalyzeButton modules={["spark_pools"]} days={window} title="Re-run the Spark analyzer for this workspace" /></h2>
+      <h2>Spark execution{window > 0 ? ` (last ${window} days)` : ""}<ProvenanceBadge meta={runMeta ?? null} module="spark_pools" />{window > 0 && <ReanalyzeButton modules={["spark_pools"]} days={window} title="Re-run the Spark analyzer for this workspace" />}</h2>
+      <SparkAccountingMetadata report={sparkPools} projectionWarnings={projectionWarnings} />
+      {windowDays == null && stats.length > 0 && (
+        <div className="small muted" role="status" style={{ marginTop: 8 }}>
+          Spark run groups do not share an observation window; aggregate totals are omitted rather than mixing windows.
+        </div>
+      )}
       <div className="grid cols-3">
         <StatCard
           label="Spark runs"
           value={fmtNum(totalRuns)}
-          sub={`${perPool.length} pool${perPool.length === 1 ? "" : "s"} · ${(window > 0 ? totalRuns / window : 0).toFixed(1)} runs/day`}
+          sub={`${perPool.length} pool${perPool.length === 1 ? "" : "s"}${window > 0 ? ` · ${(totalRuns / window).toFixed(1)} runs/day` : ""}`}
         />
         <StatCard
-          label="Spark compute"
+          label="Accounted Spark resource-time"
           value={`${totalVcoreHours.toFixed(2)} vCore-hr`}
-          sub={`${totalDurationHours.toFixed(2)} wall-clock hr · ${(window > 0 ? totalVcoreHours / window : 0).toFixed(2)} vCore-hr/day`}
+          sub={`${totalDurationHours.toFixed(2)} wall-clock hr${totals?.avgDailyVcoreHours != null ? ` · ${totals.avgDailyVcoreHours.toFixed(2)} vCore-hr/day` : ""}`}
         />
         <StatCard
-          label="Est. Fabric capacity"
+          label="Estimated Fabric Spark capacity"
           value={totalCuHours > 0 ? `${totalCuHours.toFixed(2)} CU-hr` : "—"}
-          sub={totalCuHours > 0
-            ? `≈ ${dailyCuEquivalent.toFixed(2)} CU sustained (1 CU = 2 Spark vCores)`
-            : "no Spark Livy history collected"}
+          sub={totals?.avgDailyCuHours != null && totals.steadyStateCu != null
+            && sparkSizing.included
+            ? `${totals.avgDailyCuHours.toFixed(2)} CU-hr/day · ${totals.steadyStateCu.toFixed(3)} steady-state CU (pre-headroom)`
+            : sparkSizing.warning ?? "no Spark Livy history collected"}
         />
       </div>
 
-      <table style={{ marginTop: 12 }}>
+      {perPool.length > 0 && <table style={{ marginTop: 12 }}>
         <thead>
           <tr>
             <th>Pool</th>
@@ -2651,11 +2817,18 @@ function SparkPoolsSection({ sparkPools, runMeta }: { sparkPools: import("../typ
             <th className="num">vCore-hr</th>
             <th className="num">CU-hr (Spark)</th>
             <th className="num">Avg vCore-hr / run</th>
+            <th className="num">Known / unknown usage runs</th>
           </tr>
         </thead>
         <tbody>
           {top.map((r) => {
             const avgVcore = r.runs > 0 ? r.vcoreHours / r.runs : null;
+            const poolStats = stats.filter((s) => s.pool === r.pool);
+            const poolTotals = aggregateSparkWindow(
+              poolStats,
+              windowDays ?? undefined,
+              !sparkPools.accounting_basis,
+            );
             return (
               <tr key={r.pool}>
                 <td><code>{r.pool}</code></td>
@@ -2664,12 +2837,15 @@ function SparkPoolsSection({ sparkPools, runMeta }: { sparkPools: import("../typ
                 <td className="num">{r.vcoreHours.toFixed(2)}</td>
                 <td className="num">{r.cuHours.toFixed(2)}</td>
                 <td className="num">{avgVcore != null ? avgVcore.toFixed(2) : "—"}</td>
+                <td className="num">{poolTotals?.knownUsageRunCount != null && poolTotals.unknownUsageRunCount != null
+                  ? `${poolTotals.knownUsageRunCount} / ${poolTotals.unknownUsageRunCount}`
+                  : "—"}</td>
               </tr>
             );
           })}
         </tbody>
-      </table>
-      {sparkPools.spark_runs && sparkPools.spark_runs.length > 0 && (
+      </table>}
+      {(runs.length > 0 || hasCanonicalDailyUsage) && (
         <div
           style={{
             display: "flex",
@@ -2679,10 +2855,15 @@ function SparkPoolsSection({ sparkPools, runMeta }: { sparkPools: import("../typ
           }}
         >
           <div style={{ flex: "1 1 360px", minWidth: 0 }}>
-            <SparkDailyBars runs={sparkPools.spark_runs} windowDays={28} />
+            <SparkDailyBars
+              runs={runs}
+              dailyUsage={sparkPools.daily_usage}
+              observationEnd={sparkPools.observation_end}
+              windowDays={dailyWindowDays}
+            />
           </div>
           <div style={{ flex: "1 1 360px", minWidth: 0 }}>
-            <SparkHourlyBars runs={sparkPools.spark_runs} />
+            <SparkHourlyBars runs={runs} />
           </div>
         </div>
       )}
@@ -2697,85 +2878,30 @@ function SparkPoolsSection({ sparkPools, runMeta }: { sparkPools: import("../typ
 
 function SparkDailyBars({
   runs,
+  dailyUsage,
+  observationEnd,
   windowDays = 28,
 }: {
-  runs: import("../types").SparkRunRecord[];
+  runs: SparkRunRecord[];
+  dailyUsage?: SparkPoolsReport["daily_usage"];
+  observationEnd?: string | null;
   windowDays?: number;
 }) {
-  // Per-pool stacked daily vCore-hours. Each day is a single stacked bar
-  // with one segment per Spark pool — this is what users want to see for
-  // capacity sizing (which pool is driving compute, on which day?).
-  //
-  // Day bucketing uses UTC-midnight boundaries so the window is exactly
-  // ``windowDays`` bins ending **today (UTC) inclusive**. Previously the
-  // loop produced bins ``[now-28d, now-1d]`` (28 entries starting at the
-  // millisecond ``now - 28d``) and today's runs silently dropped because
-  // the lookup key (UTC date of today) did not exist in the bin map.
-  const todayUTC = new Date();
-  todayUTC.setUTCHours(0, 0, 0, 0);
-  const startDayUTC = new Date(
-    todayUTC.getTime() - (windowDays - 1) * 24 * 60 * 60 * 1000,
+  const chartData = buildSparkDailyChartData(
+    dailyUsage,
+    runs,
+    observationEnd,
+    windowDays,
   );
-  // Runs are kept when their submitted_at falls on or after the start day
-  // (midnight UTC); this avoids losing a partial first day vs. using
-  // ``now - 28d`` which slides every second.
-  const cutoff = startDayUTC;
-
-  // Per-run CU contribution: prefer the directly measured vCore-hours,
-  // fall back to ``est_cu_hours_fabric_spark / 0.5`` (=> vCore-hours
-  // equivalent) for interactive sessions where Livy returns CU-hours
-  // but no raw vCore-seconds.
-  const vCoreOf = (r: import("../types").SparkRunRecord): number => {
-    if (typeof r.vcore_hours === "number" && r.vcore_hours > 0) return r.vcore_hours;
-    if (typeof r.est_cu_hours_fabric_spark === "number" && r.est_cu_hours_fabric_spark > 0) {
-      return r.est_cu_hours_fabric_spark / 0.5;
-    }
-    return 0;
-  };
-
-  // Discover the set of pools that contributed any runs in the window.
-  // Include pools even when their per-run vCore-hours are 0 so the
-  // legend reflects all observed pools (a Spark pool with only
-  // failed-immediately runs still belongs on the chart).
-  const pools = (() => {
-    const seen = new Set<string>();
-    for (const r of runs) {
-      if (!r.submitted_at) continue;
-      const t = new Date(r.submitted_at);
-      if (Number.isNaN(t.getTime()) || t < cutoff) continue;
-      seen.add(r.pool);
-    }
-    return Array.from(seen).sort();
-  })();
-  if (pools.length === 0) return null;
-
-  // Pre-seed every day so the x-axis is continuous, **including today**.
-  type DayBin = { day: string; perPool: Record<string, number>; total: number };
-  const bins = new Map<string, DayBin>();
-  for (let i = 0; i < windowDays; i++) {
-    const d = new Date(startDayUTC.getTime() + i * 24 * 60 * 60 * 1000);
-    const key = d.toISOString().slice(0, 10);
-    const perPool: Record<string, number> = {};
-    for (const p of pools) perPool[p] = 0;
-    bins.set(key, { day: key, perPool, total: 0 });
-  }
-
-  for (const r of runs) {
-    if (!r.submitted_at) continue;
-    const t = new Date(r.submitted_at);
-    if (Number.isNaN(t.getTime()) || t < cutoff) continue;
-    const key = t.toISOString().slice(0, 10);
-    const bin = bins.get(key);
-    if (!bin) continue;
-    const v = vCoreOf(r);
-    bin.perPool[r.pool] = (bin.perPool[r.pool] ?? 0) + v;
-    bin.total += v;
-  }
-
-  const days = Array.from(bins.values()).sort((a, b) => (a.day < b.day ? -1 : 1));
+  const days = chartData.points.map((point) => ({
+    day: point.day,
+    perPool: point.perPool,
+    total: point.totalVcoreHours,
+  }));
+  const pools = Array.from(new Set(days.flatMap((day) => Object.keys(day.perPool)))).sort();
   const maxV = Math.max(0.001, ...days.map((d) => d.total));
   const total = days.reduce((s, d) => s + d.total, 0);
-  if (total <= 0) return null;
+  if (pools.length === 0 || total <= 0) return null;
 
   // Stable per-pool color (deterministic by index so refreshes don't shuffle).
   const PALETTE = ["#2f81f7", "#3fb950", "#d29922", "#a371f7", "#db61a2", "#e36b6b", "#1f9ea3", "#bf6a02"];
@@ -2799,14 +2925,18 @@ function SparkDailyBars({
             <code>{p}</code>
           </span>
         ))}
-        <span>Spark vCore-hr per day</span>
+        <span>
+          {chartData.source === "canonical"
+            ? "Canonical daily accounted resource-time · vCore-hr/day"
+            : "Legacy run totals split over recorded run intervals · estimated vCore-hr/day"}
+        </span>
       </div>
       <svg
         viewBox={`0 0 ${width} ${height}`}
         width="100%"
         style={{ maxWidth: width, fontSize: 10 }}
         role="img"
-        aria-label={`Spark vCore-hours per day per pool for the last ${windowDays} days`}
+        aria-label={`Spark accounted vCore-hours per UTC day in the selected ${windowDays}-day window`}
       >
         <line x1={padX} x2={width - padX} y1={height - padBottom} y2={height - padBottom} stroke="currentColor" opacity={0.3} />
         <line x1={padX} x2={padX} y1={padTop} y2={height - padBottom} stroke="currentColor" opacity={0.3} />
@@ -2861,7 +2991,15 @@ function SparkDailyBars({
         })}
       </svg>
       <div className="small muted" style={{ marginTop: 4 }}>
-        Window: last {windowDays} days · {total.toFixed(2)} vCore-hr total ·{" "}
+        {days.length > 0
+          ? `Window: ${days[0].day} through ${days[days.length - 1].day} UTC`
+          : `Window: ${windowDays} complete UTC days`}
+        {" · "}{total.toFixed(2)} accounted vCore-hr total
+        {chartData.source === "legacy_interval_estimate" &&
+          " · legacy totals are allocated evenly across the recorded run interval, not measured daily usage"}
+        {chartData.omittedRunCount > 0 &&
+          ` · ${chartData.omittedRunCount} run(s) omitted because a usable interval or amount was unavailable`}
+        {" · "}
         {pools
           .map((p) => {
             const s = days.reduce((acc, d) => acc + (d.perPool[p] ?? 0), 0);
@@ -2874,55 +3012,31 @@ function SparkDailyBars({
 }
 
 /**
- * Hourly companion to ``SparkDailyBars`` covering the trailing 24 hours.
- * Per-pool stacked bars of vCore-hours bucketed into 1-hour bins ending at
- * the current local hour (inclusive). Shares the palette, layout
- * conventions and tooltip style of the 28d chart so the two read as a
- * single split-view.
+ * Hourly companion to ``SparkDailyBars``. Legacy run totals are apportioned
+ * across the recorded run interval, rather than attributed to submission time.
  */
 function SparkHourlyBars({
   runs,
 }: {
-  runs: import("../types").SparkRunRecord[];
+  runs: SparkRunRecord[];
 }) {
   const windowHours = 24;
-  // Bucket boundary = top of the current local hour. We include the
-  // current (in-progress) hour so the rightmost bin shows activity
-  // happening "now". Bins are ``[hourStart, hourStart + 1h)``.
   const now = new Date();
   const currentHourStart = new Date(now);
-  currentHourStart.setMinutes(0, 0, 0);
+  currentHourStart.setUTCMinutes(0, 0, 0);
   const firstBinStart = new Date(
     currentHourStart.getTime() - (windowHours - 1) * 60 * 60 * 1000,
   );
-  const cutoff = firstBinStart;
-
-  const vCoreOf = (r: import("../types").SparkRunRecord): number => {
-    if (typeof r.vcore_hours === "number" && r.vcore_hours > 0) return r.vcore_hours;
-    if (typeof r.est_cu_hours_fabric_spark === "number" && r.est_cu_hours_fabric_spark > 0) {
-      return r.est_cu_hours_fabric_spark / 0.5;
-    }
-    return 0;
-  };
-
-  const pools = (() => {
-    const seen = new Set<string>();
-    for (const r of runs) {
-      if (!r.submitted_at) continue;
-      const t = new Date(r.submitted_at);
-      if (Number.isNaN(t.getTime()) || t < cutoff) continue;
-      seen.add(r.pool);
-    }
-    return Array.from(seen).sort();
-  })();
+  const usage = buildSparkHourlyUsage(runs, firstBinStart, now);
+  const pools = Array.from(new Set(usage.map((entry) => entry.pool))).sort();
   if (pools.length === 0) {
     return (
       <div style={{ marginTop: 16 }}>
         <div className="small muted" style={{ marginBottom: 6 }}>
-          Spark vCore-hr per hour (last 24h)
+          Interval-split Spark resource-time by UTC hour (last 24h)
         </div>
         <div className="empty small muted" style={{ padding: 12 }}>
-          No Spark runs in the last 24 hours.
+          No Spark runs with a usable interval and accounted resource-time in the last 24 hours.
         </div>
       </div>
     );
@@ -2933,24 +3047,19 @@ function SparkHourlyBars({
   for (let i = 0; i < windowHours; i++) {
     const start = new Date(firstBinStart.getTime() + i * 60 * 60 * 1000);
     const key = start.toISOString();
-    const label = `${String(start.getHours()).padStart(2, "0")}:00`;
+    const label = `${String(start.getUTCHours()).padStart(2, "0")}:00 UTC`;
     const perPool: Record<string, number> = {};
     for (const p of pools) perPool[p] = 0;
     bins.push({ key, label, perPool, total: 0 });
   }
-  const indexFor = (ms: number) =>
-    Math.floor((ms - firstBinStart.getTime()) / (60 * 60 * 1000));
-
-  for (const r of runs) {
-    if (!r.submitted_at) continue;
-    const t = new Date(r.submitted_at);
-    if (Number.isNaN(t.getTime()) || t < cutoff) continue;
-    const idx = indexFor(t.getTime());
+  for (const entry of usage) {
+    const idx = Math.floor(
+      (Date.parse(entry.bucketStart) - firstBinStart.getTime()) / (60 * 60 * 1000),
+    );
     if (idx < 0 || idx >= bins.length) continue;
     const bin = bins[idx];
-    const v = vCoreOf(r);
-    bin.perPool[r.pool] = (bin.perPool[r.pool] ?? 0) + v;
-    bin.total += v;
+    bin.perPool[entry.pool] = (bin.perPool[entry.pool] ?? 0) + entry.vcoreHours;
+    bin.total += entry.vcoreHours;
   }
 
   const total = bins.reduce((s, b) => s + b.total, 0);
@@ -2958,10 +3067,10 @@ function SparkHourlyBars({
     return (
       <div style={{ marginTop: 16 }}>
         <div className="small muted" style={{ marginBottom: 6 }}>
-          Spark vCore-hr per hour (last 24h)
+          Interval-split Spark resource-time by UTC hour (last 24h)
         </div>
         <div className="empty small muted" style={{ padding: 12 }}>
-          No Spark vCore-hours observed in the last 24 hours.
+          No interval-split Spark resource-time in the last 24 hours.
         </div>
       </div>
     );
@@ -2989,14 +3098,14 @@ function SparkHourlyBars({
             <code>{p}</code>
           </span>
         ))}
-        <span>Spark vCore-hr per hour (last 24h)</span>
+        <span>Estimated vCore-hr apportioned evenly over each recorded run interval · not measured hourly usage</span>
       </div>
       <svg
         viewBox={`0 0 ${width} ${height}`}
         width="100%"
         style={{ maxWidth: width, fontSize: 10 }}
         role="img"
-        aria-label="Spark vCore-hours per hour per pool for the last 24 hours"
+        aria-label="Estimated Spark vCore-hours apportioned across run intervals by UTC hour for the last 24 hours"
       >
         <line x1={padX} x2={width - padX} y1={height - padBottom} y2={height - padBottom} stroke="currentColor" opacity={0.3} />
         <line x1={padX} x2={padX} y1={padTop} y2={height - padBottom} stroke="currentColor" opacity={0.3} />
@@ -3049,7 +3158,7 @@ function SparkHourlyBars({
             </g>
           );
         })}
-        {/* Average vCore-hr per hour reference line. */}
+        {/* Average interval-apportioned vCore-hours per hour reference line. */}
         {(() => {
           const avg = total / bins.length;
           if (avg <= 0) return null;
@@ -3066,7 +3175,7 @@ function SparkHourlyBars({
                 strokeWidth={1.5}
                 opacity={0.85}
               >
-                <title>{`Average: ${avg.toFixed(2)} vCore-hr/hour`}</title>
+                <title>{`Average: ${avg.toFixed(2)} apportioned vCore-hr/hour`}</title>
               </line>
               <text
                 x={width - padX - 4}
@@ -3082,7 +3191,7 @@ function SparkHourlyBars({
         })()}
       </svg>
       <div className="small muted" style={{ marginTop: 4 }}>
-        Window: last 24h · {total.toFixed(2)} vCore-hr total
+        Window: last 24h · {total.toFixed(2)} interval-apportioned vCore-hr
       </div>
     </div>
   );
@@ -4886,4 +4995,3 @@ function BigQueryStorageView({
     </>
   );
 }
-

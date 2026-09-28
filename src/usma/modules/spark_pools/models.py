@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -103,6 +103,8 @@ class SparkRunRecord(BaseModel):
     pool: str
     name: str | None = None
     app_id: str | None = None
+    app_info: dict[str, Any] = Field(default_factory=dict)
+    source_endpoint: Literal["batch", "session"] | None = None
     submitter_id: str | None = None
     submitter_name: str | None = None
     artifact_id: str | None = None
@@ -110,6 +112,8 @@ class SparkRunRecord(BaseModel):
     result: str | None = None
     outcome: Literal["succeeded", "failed", "in_progress"] = "in_progress"
     submitted_at: datetime | None = None
+    accounting_start_at: datetime | None = None
+    accounting_start_basis: str | None = None
     ended_at: datetime | None = None
     duration_seconds: float | None = None
     driver_cores: int | None = None
@@ -120,8 +124,12 @@ class SparkRunRecord(BaseModel):
     vcore_hours: float | None = None
     est_cu_hours_fabric_spark: float | None = Field(
         default=None,
-        description="Fabric CU-hours = vCore-hours × 0.5 (1 CU = 2 Spark vCores).",
+        description=(
+            "Fixed-shape estimate: vCore-hours × 0.5 (1 CU = 2 Spark vCores). "
+            "Livy history does not provide an allocation timeline."
+        ),
     )
+    usage_basis: Literal["fixed_shape_estimate", "unknown"] = "unknown"
     # Pipeline correlation (populated when the Spark conf carries the
     # Synapse-injected `spark.synapse.context.*` keys). These let
     # downstream tooling join Spark runs to the parent pipeline / activity
@@ -144,11 +152,13 @@ class SparkRunWindowStats(BaseModel):
     total_vcore_hours: float = 0.0
     est_cu_hours_fabric_spark: float = 0.0
     avg_vcore_hours_per_run: float | None = None
-    # v2.6.3 — maximum CU-hours observed in any single UTC day inside
-    # this window (sum across all runs of ``est_cu_hours_fabric_spark``
-    # bucketed by ``submitted_at.date()``). Drives the Fabric SKU
-    # recommendation, which sizes capacity to the busiest day rather than
-    # the window average (Fabric's burndown smoothing window is 24h).
+    avg_daily_vcore_hours: float | None = None
+    avg_daily_cu_hours: float | None = None
+    steady_state_cu: float | None = None
+    known_usage_run_count: int = 0
+    unknown_usage_run_count: int = 0
+    # Maximum estimated CU-hours attributed to one UTC day in this window.
+    # Keep as a peak diagnostic, separate from the daily-average baseline.
     peak_day_cu_hours: float = 0.0
 
 
@@ -157,6 +167,12 @@ class SparkPoolRunStats(BaseModel):
     pool: str
     kind: Literal["scheduled", "interactive"]
     windows: list[SparkRunWindowStats] = Field(default_factory=list)
+
+
+class SparkDailyUsage(BaseModel):
+    day: date
+    total_vcore_hours: float = 0.0
+    est_cu_hours_fabric_spark: float = 0.0
 
 
 class SparkAnalysis(BaseModel):
@@ -175,6 +191,12 @@ class SparkAnalysis(BaseModel):
     spark_runs: list[SparkRunRecord] = Field(default_factory=list)
     run_stats: list[SparkPoolRunStats] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
+    accounting_basis: str = "unavailable"
+    observation_start: datetime | None = None
+    observation_end: datetime | None = None
+    collection_complete: bool | None = None
+    accounting_warnings: list[str] = Field(default_factory=list)
+    daily_usage: list[SparkDailyUsage] = Field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return self.model_dump(mode="json")

@@ -133,6 +133,11 @@ class CapacityProjection(BaseModel):
     # not available.
     dwu_cu_contribution: float = 0.0
     spark_cu_contribution: float = 0.0
+    spark_steady_state_cu: float = 0.0
+    spark_daily_cu_hours: float = 0.0
+    spark_window_days: int = 0
+    spark_peak_day_cu_hours: float | None = None
+    spark_accounting_warnings: list[str] = Field(default_factory=list)
     pipelines_cu_contribution: float = 0.0
     serverless_cu_contribution: float = 0.0
     # Pre-smoothing peak-day CU-hours for serverless SQL (sized at 0.02 CU

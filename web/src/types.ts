@@ -62,6 +62,13 @@ export interface CapacityProjection {
   serverless_cu_contribution?: number;
   // Raw peak-day CU-hours for serverless SQL (pre-24h smoothing).
   serverless_peak_day_cu_hours?: number;
+  // Spark's unbuffered average-demand contribution; peak-day usage is a
+  // separate diagnostic and must not be substituted for this value.
+  spark_steady_state_cu?: number | null;
+  spark_daily_cu_hours?: number | null;
+  spark_window_days?: number | null;
+  spark_peak_day_cu_hours?: number | null;
+  spark_accounting_warnings?: string[];
 }
 
 export interface RunbookStep {
@@ -432,6 +439,8 @@ export interface SparkRunRecord {
   result?: string | null;
   outcome: "succeeded" | "failed" | "in_progress";
   submitted_at?: string | null;
+  accounting_start_at?: string | null;
+  accounting_start_basis?: string | null;
   ended_at?: string | null;
   duration_seconds?: number | null;
   driver_cores?: number | null;
@@ -442,6 +451,7 @@ export interface SparkRunRecord {
   vcore_hours?: number | null;
   // Fabric CU-hours = vcore_hours * 0.5 (1 CU = 2 Spark vCores).
   est_cu_hours_fabric_spark?: number | null;
+  usage_basis?: "fixed_shape_estimate" | "unknown" | string;
 }
 
 export interface SparkRunWindowStats {
@@ -454,12 +464,24 @@ export interface SparkRunWindowStats {
   total_vcore_hours: number;
   est_cu_hours_fabric_spark: number;
   avg_vcore_hours_per_run?: number | null;
+  avg_daily_vcore_hours?: number | null;
+  avg_daily_cu_hours?: number | null;
+  steady_state_cu?: number | null;
+  known_usage_run_count?: number | null;
+  unknown_usage_run_count?: number | null;
+  peak_day_cu_hours?: number | null;
 }
 
 export interface SparkPoolRunStats {
   pool: string;
   kind: "scheduled" | "interactive";
   windows: SparkRunWindowStats[];
+}
+
+export interface SparkDailyUsage {
+  day: string;
+  total_vcore_hours: number;
+  est_cu_hours_fabric_spark: number;
 }
 
 export interface SparkPoolsReport {
@@ -478,6 +500,12 @@ export interface SparkPoolsReport {
   spark_job_definitions?: Array<{ name: string }>;
   spark_runs?: SparkRunRecord[];
   run_stats?: SparkPoolRunStats[];
+  accounting_basis?: string;
+  observation_start?: string | null;
+  observation_end?: string | null;
+  collection_complete?: boolean | null;
+  accounting_warnings?: string[];
+  daily_usage?: SparkDailyUsage[];
   errors?: string[];
 }
 
@@ -955,6 +983,7 @@ export interface EstateWorkspace {
   blocker_count: number;
   warning_count: number;
   info_count: number;
+  capacity_warnings?: string[];
   tsql_compatibility_pct: number | null;
   projected_fabric_cu: number | null;
   recommended_fabric_sku: string | null;
@@ -1371,4 +1400,3 @@ export interface SnowflakeWorkloadsReport {
   unsupported_object_count?: number;
   partial_object_count?: number;
 }
-

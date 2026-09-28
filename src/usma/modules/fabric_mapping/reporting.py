@@ -41,6 +41,16 @@ def write_reports(result: FabricMappingReport, out_dir: Path, formats: Iterable[
             counts = ", ".join(f"{k}={v}" for k, v in sorted(s.counts.items())) or "-"
             lines.append(f"| {s.module} | `{s.source_file}` | {counts} |")
         lines.append("")
+        if result.capacity_projection is not None:
+            cp = result.capacity_projection
+            lines.extend([
+                "## Capacity projection",
+                "",
+                f"- Estimated CU with {cp.headroom_pct}% headroom: {cp.estimated_cu}",
+                f"- Recommended SKU: {cp.recommended_sku}",
+            ])
+            lines.extend(f"- {note}" for note in cp.notes)
+            lines.append("")
         # Readiness + T-SQL surface compatibility (executive summary).
         if result.readiness is not None:
             rd = result.readiness

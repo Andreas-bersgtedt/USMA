@@ -1,7 +1,7 @@
 """Smoke tests for the HTML reports added across all modules + the index page."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from usma.modules.fabric_mapping.html_report import write_html as fabric_html
@@ -31,14 +31,20 @@ from usma.modules.pipelines.models import (
     ScheduleMapping,
     Trigger,
 )
-from usma.modules.spark_pools.html_report import write_html as spark_html
+from usma.modules.spark_pools.html_report import (
+    daily_usage_for_window,
+    write_html as spark_html,
+)
 from usma.modules.spark_pools.models import (
     Notebook,
     NotebookLintFinding,
     RuntimeMappingResult,
     SparkAnalysis,
+    SparkDailyUsage,
     SparkJobDefinition,
     SparkPool,
+    SparkPoolRunStats,
+    SparkRunWindowStats,
     WorkspacePackage,
 )
 from usma.reporting.index_report import write_index
@@ -75,6 +81,45 @@ def test_spark_html(tmp_path: Path) -> None:
     assert "mssparkutils" in text
     assert "Runtime mapping" in text and "upgrade" in text
     assert "numpy" in text
+
+
+def test_spark_daily_report_uses_half_open_common_window(tmp_path: Path) -> None:
+    result = SparkAnalysis(
+        workspace_name="ws",
+        subscription_id="sub",
+        resource_group="rg",
+        generated_at=datetime(2026, 9, 29, tzinfo=timezone.utc),
+        observation_start=datetime(2026, 9, 19, tzinfo=timezone.utc),
+        observation_end=datetime(2026, 9, 29, tzinfo=timezone.utc),
+        daily_usage=[
+            SparkDailyUsage(day=date(2026, 9, 21), total_vcore_hours=1),
+            SparkDailyUsage(day=date(2026, 9, 22), total_vcore_hours=2),
+            SparkDailyUsage(day=date(2026, 9, 28), total_vcore_hours=3),
+            SparkDailyUsage(day=date(2026, 9, 29), total_vcore_hours=4),
+        ],
+        run_stats=[
+            SparkPoolRunStats(
+                pool="p1",
+                kind="scheduled",
+                windows=[
+                    SparkRunWindowStats(
+                        window_days=7,
+                        run_count=1,
+                        total_vcore_hours=10,
+                        est_cu_hours_fabric_spark=5,
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    daily_usage = daily_usage_for_window(result, 7)
+    assert [row.day for row in daily_usage] == [date(2026, 9, 22), date(2026, 9, 28)]
+    report_path = spark_html(result, tmp_path)
+    report = report_path.read_text(encoding="utf-8")
+    assert "<td>2026-09-22</td>" in report and "<td>2026-09-28</td>" in report
+    assert "<td>2026-09-21</td>" not in report
+    assert "<td>2026-09-29</td>" not in report
 
 
 def test_pipelines_html(tmp_path: Path) -> None:

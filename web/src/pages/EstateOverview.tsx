@@ -475,8 +475,32 @@ export default function EstateOverview() {
                               ws.actual_currency,
                             )}
                           </td>
-                          <td>{ws.recommended_fabric_sku ?? "—"}</td>
-                          <td className="num">{fmtNum(ws.projected_fabric_cu, 1)}</td>
+                          <td>
+                            {ws.recommended_fabric_sku ?? "—"}
+                            {(ws.capacity_warnings?.length ?? 0) > 0 && (
+                              <div>
+                                <span
+                                  className="pill warn"
+                                  title={ws.capacity_warnings?.join("\n")}
+                                >
+                                  estimate caveat
+                                </span>
+                              </div>
+                            )}
+                          </td>
+                          <td className="num">
+                            {fmtNum(ws.projected_fabric_cu, 1)}
+                            {(ws.capacity_warnings?.length ?? 0) > 0 && (
+                              <div>
+                                <span
+                                  className="pill warn"
+                                  title={ws.capacity_warnings?.join("\n")}
+                                >
+                                  estimate caveat
+                                </span>
+                              </div>
+                            )}
+                          </td>
                           <td
                             className="num"
                             title={

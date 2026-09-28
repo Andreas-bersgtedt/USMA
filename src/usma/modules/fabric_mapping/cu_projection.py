@@ -26,8 +26,12 @@ is intended as a *starting* SKU for a POC, not a final size.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
+import logging
+from math import isfinite
 from typing import Iterable
 
+log = logging.getLogger(__name__)
 # Microsoft's Fabric capacity F-SKUs in Capacity Units (CU). F2/F4/... up to F2048.
 # Subset most relevant for Synapse DW migrations.
 _FSKU_TABLE: tuple[tuple[str, int], ...] = (
@@ -60,53 +64,23 @@ class CapacityProjection:
     # alongside the 24h-burndown sustained CU — useful because serverless
     # users typically reason in instantaneous CU, not 24h averages.
     serverless_peak_day_cu_hours: float = 0.0
+    spark_steady_state_cu: float = 0.0
+    spark_daily_cu_hours: float = 0.0
+    spark_window_days: int = 0
+    spark_peak_day_cu_hours: float | None = None
+    spark_accounting_warnings: tuple[str, ...] = ()
 
 
 def _peak_day_cu_from_payload(
     payload: dict | None,
     *,
-    spark_field: str | None = None,
     pipeline_fields: tuple[str, ...] = (),
 ) -> tuple[float, int]:
-    """Find the worst single-day CU-hour total across pools/pipelines.
-
-    Fabric capacity smooths CU-second consumption over a rolling 24h
-    burndown window, so the relevant sizing signal is **peak day**, not
-    weekly average. We pick the 7-day rolling stat as our preferred
-    observation window (long enough to catch a typical workday, short
-    enough to react to recent migrations); if it's missing we fall back
-    to the first window present.
-
-    For each (pool, kind) or pipeline we read the per-window
-    ``peak_day_cu_hours`` value (computed at collection time when the
-    actual run timestamps are still available). The **maximum** across
-    entries is returned, on the assumption that the busiest day for
-    pool A and the busiest day for pool B can coincide in the worst
-    case \u2014 use the larger of the two as the headroom basis.
-
-    Returns ``(peak_day_cu_hours, window_days)``.
-    """
+    """Existing pipeline peak heuristic; not used for Spark steady state."""
     if not isinstance(payload, dict):
         return 0.0, 0
     peak = 0.0
     window_days = 0
-
-    if spark_field is not None:
-        for entry in payload.get("run_stats") or []:
-            windows = entry.get("windows") or []
-            if not windows:
-                continue
-            w = next((x for x in windows if x.get("window_days") == 7), windows[0])
-            value = w.get("peak_day_cu_hours")
-            if value is None:
-                # Backwards compatibility with pre-v2.6.3 artefacts: derive
-                # a conservative peak-day estimate from the window total.
-                # Assume the work concentrates into half the window's days.
-                total = float(w.get(spark_field) or 0.0)
-                wd = int(w.get("window_days") or 0)
-                value = (total / max(1, wd / 2)) if total and wd else 0.0
-            peak = max(peak, float(value or 0.0))
-            window_days = max(window_days, int(w.get("window_days") or 0))
 
     if pipeline_fields:
         rh = payload.get("run_history") or {}
@@ -126,14 +100,88 @@ def _peak_day_cu_from_payload(
     return peak, window_days
 
 
-def _spark_peak_day_cu(payload: dict | None) -> tuple[float, int]:
-    """Spark Livy peak-day CU from ``spark_pools.json`` ``run_stats``."""
+def _spark_daily_cu(payload: dict | None) -> tuple[float, int, float | None, tuple[str, ...]]:
+    """Daily-average Spark CU-hours over one common observation window.
+
+    Peak-day demand is a separate diagnostic, derived only from dated daily
+    totals. Per-group peaks cannot reconstruct the combined portfolio peak.
+    """
     if not payload:
-        return 0.0, 0
-    return _peak_day_cu_from_payload(
-        payload,
-        spark_field="est_cu_hours_fabric_spark",
+        return 0.0, 0, None, ()
+    legacy = not str(payload.get("accounting_basis") or "").strip()
+    warnings = list(payload.get("accounting_warnings") or [])
+    if payload.get("collection_complete") is False:
+        warnings.append("Spark collection is incomplete; Spark is excluded from steady-state sizing.")
+    elif payload.get("collection_complete") is None:
+        warnings.append(
+            "Spark collection coverage is unknown for this historical artifact."
+            if legacy else
+            "Spark collection coverage is unknown; Spark is excluded from steady-state sizing."
+        )
+    warnings.append(
+        "Spark CU-hours assume equivalent resource-time on Fabric; they are not measured Fabric billing."
     )
+    entries = payload.get("run_stats") or []
+    if not entries:
+        return 0.0, 0, None, tuple(dict.fromkeys(warnings))
+    common: set[int] | None = None
+    for entry in entries:
+        days = {
+            w["window_days"] for w in entry.get("windows") or []
+            if isinstance(w.get("window_days"), int) and w["window_days"] > 0
+        }
+        common = days if common is None else common & days
+    if not common:
+        message = "Spark groups have no common observation window; no combined average can be calculated."
+        log.warning(message)
+        warnings.append(message)
+        return 0.0, 0, None, tuple(dict.fromkeys(warnings))
+    days = 7 if 7 in common else min(common)
+    selected = [
+        next(w for w in entry["windows"] if w["window_days"] == days)
+        for entry in entries
+    ]
+    total = 0.0
+    for window in selected:
+        value = float(window.get("est_cu_hours_fabric_spark") or 0.0)
+        if not isfinite(value) or value < 0:
+            raise ValueError("Spark CU-hours must be finite and non-negative.")
+        total += value
+    unknown_usage = any(w.get("unknown_usage_run_count", 0) for w in selected)
+    if unknown_usage:
+        warnings.append("Some Spark runs have unknown consumption; Spark is excluded from steady-state sizing.")
+    if any("known_usage_run_count" not in w for w in selected):
+        warnings.append("Historical Spark totals have unverified shape, runtime and duplicate accounting.")
+    unavailable = not legacy and (
+        payload.get("collection_complete") is not True
+        or any(
+            w.get("unknown_usage_run_count") is None
+            or w.get("avg_daily_cu_hours") is None
+            or w.get("steady_state_cu") is None
+            for w in selected
+        )
+    )
+    if unavailable:
+        warnings.append("Spark accounting coverage or daily averages are unavailable; Spark is excluded from sizing.")
+    if payload.get("collection_complete") is False or unknown_usage or unavailable:
+        log.warning("Spark steady-state sizing unavailable: incomplete collection or unknown consumption.")
+        return 0.0, days, None, tuple(dict.fromkeys(warnings))
+    peak: float | None = None
+    daily = payload.get("daily_usage")
+    end_text = payload.get("observation_end")
+    if daily is not None and end_text:
+        end = datetime.fromisoformat(end_text.replace("Z", "+00:00")).date()
+        start = end - timedelta(days=days)
+        by_day: dict[str, float] = {}
+        for row in daily:
+            day = row["day"]
+            if start.isoformat() <= day < end.isoformat():
+                value = float(row.get("est_cu_hours_fabric_spark") or 0.0)
+                if not isfinite(value) or value < 0:
+                    raise ValueError("Spark daily CU-hours must be finite and non-negative.")
+                by_day[day] = by_day.get(day, 0.0) + value
+        peak = max(by_day.values(), default=0.0)
+    return total / days, days, peak, tuple(dict.fromkeys(warnings))
 
 
 def _pipelines_peak_day_cu(payload: dict | None) -> tuple[float, int]:
@@ -184,12 +232,10 @@ def project_capacity(
        across all pools and timestamps, converted at :data:`DWU_TO_CU`.
        DWU is already a rate metric so the peak instantaneous value is
        what matters, not an average over the window.
-    2. **Spark Livy** (when ``spark_payload`` is provided) \u2014 the
-       worst-day CU-hours across pools, divided by 24h. We use the
-       per-day peak (``peak_day_cu_hours``) rather than the weekly
-       average because Fabric capacity smoothing is a 24h burndown
-       window: a one-day burst that exceeds ``F-SKU \u00d7 24`` CU-hours
-       will throttle even if the weekly average is comfortable.
+    2. **Spark Livy** (when ``spark_payload`` is provided) - sum CU-hours
+       across pools and trigger kinds in one common window, divide by
+       observation days, then by 24 for steady-state CU. Peak demand and
+       instantaneous concurrency remain separate sizing checks.
     3. **Pipelines** (when ``pipelines_payload`` is provided) \u2014 same
        per-day peak math, summing DIU + Mapping-Data-Flow vCore +
        orchestration CU-hours across pipelines.
@@ -237,11 +283,9 @@ def project_capacity(
     has_dwu = (has_pct and has_limit) and peak_dwu > 0
     dwu_cu = peak_dwu * DWU_TO_CU if has_dwu else 0.0
 
-    # Spark + Pipelines: convert peak-day CU-hours to required sustained
-    # CU by dividing by Fabric's 24h burndown smoothing window.
-    spark_peak_day, spark_window = _spark_peak_day_cu(spark_payload)
+    spark_daily, spark_window, spark_peak_day, spark_warnings = _spark_daily_cu(spark_payload)
     pipelines_peak_day, pipelines_window = _pipelines_peak_day_cu(pipelines_payload)
-    spark_cu = spark_peak_day / 24.0
+    spark_cu = spark_daily / 24.0
     pipelines_cu = pipelines_peak_day / 24.0
 
     # Serverless SQL (Fabric SQL Analytics Endpoint): peak-day CU-hours
@@ -269,10 +313,11 @@ def project_capacity(
         )
     if spark_cu > 0:
         notes.append(
-            f"Spark peak-day = {spark_peak_day:.2f} CU-hr"
-            f" → {spark_cu:.2f} CU sustained over Fabric's 24h burndown"
-            f" (worst day in last {spark_window} days).",
+            f"Spark daily average = {spark_daily:.2f} CU-hours/day"
+            f" -> {spark_cu:.4f} steady-state CU"
+            f" ({spark_window}-day window, before headroom).",
         )
+    notes.extend(spark_warnings)
     if pipelines_cu > 0:
         notes.append(
             f"Pipelines peak-day = {pipelines_peak_day:.2f} CU-hr"
@@ -307,6 +352,11 @@ def project_capacity(
         pipelines_cu_contribution=round(pipelines_cu * multiplier, 2),
         serverless_cu_contribution=round(serverless_cu * multiplier, 2),
         serverless_peak_day_cu_hours=round(serverless_peak_day, 2),
+        spark_steady_state_cu=spark_cu,
+        spark_daily_cu_hours=spark_daily,
+        spark_window_days=spark_window,
+        spark_peak_day_cu_hours=spark_peak_day,
+        spark_accounting_warnings=spark_warnings,
     )
 
 

@@ -111,9 +111,11 @@ its outputs can be reproduced and audited.
 
 - **Dedicated SQL pool DWU** — per-timestamp peak from Azure Monitor
   (`DWUUsedPercent` × `DWULimit`). Already a peak signal.
-- **Spark vCore-hours** — derived per Livy run from
-  `app_info.driver_vcores + executor_vcores × num_executors`
-  multiplied by wall-clock seconds, summed per UTC submission day.
+- **Spark vCore-hours**: deduplicated Livy applications, estimated from driver
+  plus executor cores and applicable runtime. Usage is clipped to complete UTC
+  observation days and split across day boundaries, not assigned entirely to
+  submission day. This is a fixed-shape estimate, not historical allocation
+  telemetry or billed usage.
 - **Pipelines vCore-hours** — sum of:
   - Data Integration Units (DIU) × seconds for Copy / Lookup activities,
   - mapping-dataflow `compute.coreCount` × `output.executionDuration`,
@@ -123,24 +125,26 @@ its outputs can be reproduced and audited.
 
 | From | To | Ratio | Source |
 |---|---|---|---|
-| 1 Spark vCore-hour | Fabric CU-hour | × 0.5 | Microsoft published rate: 1 Fabric CU = 2 Spark vCores. |
+| 1 Spark vCore-hour | Fabric CU-hour | × 0.5 | Microsoft publishes 2 Fabric Spark vCores per CU. Applying this to Synapse assumes comparable migrated resource-time. |
 | 1 ADF vCore-hour (DIU or MDF) | Fabric CU-hour | × 0.5 | Same conversion (data-integration vCores). |
 | 1 DWU100c-hour | Fabric CU-hour | mapped via the SKU lookup table in `fabric_mapping/capacity_projection.py` | Microsoft DWU→CU mapping for the dedicated-pool → Fabric Warehouse migration path. |
 
-### Peak-day rule (since 2.6.3)
+### Spark daily-average steady state
 
-Fabric capacity smooths CU-second consumption over a rolling **24-hour
-burndown window**, so a one-day spike that exceeds `F-SKU × 24
-CU-hours` will throttle even when the weekly average is comfortable.
-SMA's Spark + Pipelines contribution to the SKU recommendation is
-therefore derived from the **worst single UTC day** inside the
-observation window, divided by 24h — not the window total divided by
-`window_days × 24`. DWU contribution is unchanged because Monitor
-metrics already give per-timestamp peaks.
+The Spark contribution is total estimated CU-hours divided by observation days
+and then by 24. All pool and trigger groups use one common window, preferring
+seven days. Observed zero-usage days remain in the denominator.
 
-This is the difference between "the workspace averages 10 CU" and
-"the workspace's busiest day was 70 CU" — SMA recommends for the 70
-CU peak so you don't get throttled on Tuesdays.
+Peak-day usage is a separate diagnostic. Fabric's 24-hour background smoothing
+does not make a busiest-day estimate a daily average, and neither a calendar-day
+peak nor a daily average guarantees sufficient instantaneous concurrency.
+Validate bursts, executor limits and queueing on the proposed Fabric capacity.
+Incomplete Spark collection or unknown consumption prevents a steady-state
+Spark recommendation.
+
+DWU, pipeline and serverless heuristics are unchanged by this Spark correction.
+See [Spark accounting](../spark-accounting.md) for formulas, provenance,
+legacy-artifact behavior and Microsoft documentation.
 
 ### SKU sizing
 

@@ -7,6 +7,10 @@ proposed in this file.**
 
 Date of review: 2026-05-11 (current Fabric `learn.microsoft.com` docs).
 
+This is a historical review. Its Spark aggregation and sizing descriptions are
+superseded by [Spark accounting](spark-accounting.md), which defines the current
+daily-average baseline, observation windows and estimation limits.
+
 ---
 
 ## 1 · Authoritative CU consumption rates (Fabric docs)

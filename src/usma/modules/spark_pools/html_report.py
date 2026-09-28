@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 from jinja2 import Environment, select_autoescape
 
 from ...reporting.html_common import SHARED_CSS, SHARED_FILTER_JS
-from .models import SparkAnalysis
+from .models import SparkAnalysis, SparkDailyUsage, SparkPoolRunStats
 
 _TEMPLATE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -30,11 +31,15 @@ _TEMPLATE = """<!doctype html>
  <div class="stat"><div class="label">Libraries</div><div class="value">{{ r.libraries|length }}</div></div>
  <div class="stat"><div class="label">Spark runs (Livy)</div><div class="value">{{ r.spark_runs|length }}</div></div>
  <div class="stat"><div class="label">Est. CU-h (Fabric Spark)</div><div class="value">{{ "%.1f"|format(total_cu_hours) }}</div></div>
+ {% if steady_state_cu is not none %}
+ <div class="stat"><div class="label">Steady-state CU (pre-headroom)</div><div class="value">{{ "%.3f"|format(steady_state_cu) }}</div></div>
+ {% endif %}
 </div>
 
 <div class="toc">
  <strong>Sections:</strong>
  <a href="#pools">Pools</a>
+ <a href="#accounting">Spark accounting</a>
  {% if r.runtime_mappings %}<a href="#runtime">Runtime mapping</a>{% endif %}
  {% if r.notebooks %}<a href="#notebooks">Notebooks</a>{% endif %}
  {% if r.notebook_lint_findings %}<a href="#lint">Lint findings</a>{% endif %}
@@ -49,6 +54,41 @@ _TEMPLATE = """<!doctype html>
 <h2 id="errors">Collection errors</h2>
 <details open><summary class="err">{{ r.errors|length }} error(s)</summary>
  <ul class="err">{% for e in r.errors %}<li>{{ e }}</li>{% endfor %}</ul></details>
+{% endif %}
+
+<h2 id="accounting">Spark accounting and coverage</h2>
+<p><strong>Accounting basis:</strong> <code>{{ r.accounting_basis }}</code>.
+ {% if 'fixed_shape' in (r.accounting_basis or '')|lower %}
+ This is a fixed-shape estimate derived from recorded Spark shape and runtime,
+ not measured Synapse billing or a guarantee of equivalent Fabric performance.
+ {% else %}
+ This is an estimate, not a claim of measured Synapse billing or equivalent Fabric performance.
+ {% endif %}
+</p>
+<p><strong>Observation period:</strong>
+ {{ r.observation_start.isoformat() if r.observation_start else 'unknown' }}
+ to {{ r.observation_end.isoformat() if r.observation_end else 'unknown' }}.
+ <strong>Collection coverage:</strong>
+ {% if r.collection_complete is sameas true %}complete{% elif r.collection_complete is sameas false %}incomplete{% else %}unknown (legacy or unavailable metadata){% endif %}.
+</p>
+{% if r.collection_complete is not sameas true %}
+<p class="pill warn">Coverage is incomplete or unknown; missing telemetry is not zero usage.</p>
+{% endif %}
+{% if r.accounting_warnings %}
+<ul class="err">{% for warning in r.accounting_warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+{% endif %}
+{% if daily_usage %}
+<h3>Daily accounted usage (UTC, {{ daily_window_days }}-day common/observation window)</h3>
+<table>
+ <tr><th>UTC day</th><th class="num">vCore-h</th><th class="num">Estimated Fabric Spark CU-h</th></tr>
+ {% for d in daily_usage %}
+ <tr>
+  <td>{{ d.day.isoformat() }}</td>
+  <td class="num">{{ "%.2f"|format(d.total_vcore_hours) }}</td>
+  <td class="num">{{ "%.2f"|format(d.est_cu_hours_fabric_spark) }}</td>
+ </tr>
+ {% endfor %}
+</table>
 {% endif %}
 
 <h2 id="pools">Pools ({{ r.pools|length }})</h2>
@@ -172,13 +212,17 @@ _TEMPLATE = """<!doctype html>
 
 {% if r.run_stats %}
 <h2 id="runstats">Spark execution (Livy job history)</h2>
-<p class="muted small">vCore-seconds × 0.5 = Fabric CU-seconds (1 CU = 2 Spark vCores).
-Pulled from the Synapse Spark Livy API; covers both notebook (interactive)
-sessions and pipeline/SJD-triggered (scheduled) batch jobs.</p>
+<p class="muted small">Fabric Spark conversion assumption: 1 CU = 2 Spark vCores
+(0.5 estimated CU-h per accounted vCore-h). This is a migration estimate, not
+measured Fabric usage. Steady-state CU is the observation-period average, before
+headroom; it is not CU/day.</p>
 <table>
  <tr><th>Pool</th><th>Kind</th><th>Window</th><th class="num">Runs</th><th class="num">Succeeded</th>
   <th class="num">Failed</th><th class="num">Duration h</th><th class="num">vCore-h</th>
-  <th class="num">Est. CU-h (Fabric)</th><th class="num">Avg vCore-h/run</th></tr>
+  <th class="num">Est. CU-h (Fabric)</th><th class="num">Avg vCore-h/run</th>
+  <th class="num">Avg daily vCore-h</th><th class="num">Avg daily CU-h</th>
+  <th class="num">Steady-state CU</th><th class="num">Peak-day CU-h (diagnostic)</th>
+  <th class="num">Known / unknown usage runs</th></tr>
  {% for s in r.run_stats %}
   {% for w in s.windows %}
   <tr>
@@ -192,6 +236,11 @@ sessions and pipeline/SJD-triggered (scheduled) batch jobs.</p>
    <td class="num">{{ "%.2f"|format(w.total_vcore_hours) }}</td>
    <td class="num">{{ "%.2f"|format(w.est_cu_hours_fabric_spark) }}</td>
    <td class="num">{{ "%.2f"|format(w.avg_vcore_hours_per_run) if w.avg_vcore_hours_per_run is not none else '' }}</td>
+   <td class="num">{{ "%.2f"|format(w.avg_daily_vcore_hours) if w.avg_daily_vcore_hours is not none else '' }}</td>
+   <td class="num">{{ "%.2f"|format(w.avg_daily_cu_hours) if w.avg_daily_cu_hours is not none else '' }}</td>
+   <td class="num">{{ "%.3f"|format(w.steady_state_cu) if w.steady_state_cu is not none else '' }}</td>
+   <td class="num">{{ "%.2f"|format(w.peak_day_cu_hours) if w.peak_day_cu_hours is not none else '' }}</td>
+   <td class="num">{{ w.known_usage_run_count }} / {{ w.unknown_usage_run_count }}</td>
   </tr>
   {% endfor %}
  {% endfor %}
@@ -224,16 +273,75 @@ def write_html(result: SparkAnalysis, out_dir: Path) -> Path:
     lint_by_nb: dict[str, list[Any]] = defaultdict(list)
     for f in result.notebook_lint_findings:
         lint_by_nb[f.notebook].append(f)
-    total_cu_hours = sum(
-        (r.est_cu_hours_fabric_spark or 0.0) for r in result.spark_runs
-    )
+    if result.daily_usage or result.collection_complete is not None:
+        total_cu_hours = sum(day.est_cu_hours_fabric_spark for day in result.daily_usage)
+    else:
+        total_cu_hours = sum(
+            (r.est_cu_hours_fabric_spark or 0.0) for r in result.spark_runs
+        )
+    common_days = common_spark_window_days(result.run_stats)
+    daily_window_days = common_days or observation_window_days(result)
+    daily_usage = daily_usage_for_window(result, daily_window_days)
+    steady_state_cu = None
+    if common_days is not None:
+        daily_cu_hours = 0.0
+        daily_values_available = True
+        for stat in result.run_stats:
+            window = next(w for w in stat.windows if w.window_days == common_days)
+            if window.avg_daily_cu_hours is None:
+                daily_values_available = False
+                break
+            daily_cu_hours += window.avg_daily_cu_hours
+        if daily_values_available:
+            steady_state_cu = daily_cu_hours / 24.0
     html = template.render(
         r=result,
         lint_by_nb=dict(lint_by_nb),
         css=SHARED_CSS,
         js=SHARED_FILTER_JS,
         total_cu_hours=total_cu_hours,
+        steady_state_cu=steady_state_cu,
+        daily_usage=daily_usage,
+        daily_window_days=daily_window_days,
     )
     path = out_dir / "spark_pools.html"
     path.write_text(html, encoding="utf-8")
     return path
+
+
+def common_spark_window_days(run_stats: list[SparkPoolRunStats]) -> int | None:
+    if not run_stats or any(not stat.windows for stat in run_stats):
+        return None
+    shared = {
+        window.window_days
+        for window in run_stats[0].windows
+        if window.window_days > 0
+    }
+    for stat in run_stats[1:]:
+        shared.intersection_update(
+            window.window_days for window in stat.windows if window.window_days > 0
+        )
+    if not shared:
+        return None
+    return 7 if 7 in shared else min(shared)
+
+
+def observation_window_days(result: SparkAnalysis) -> int | None:
+    if result.observation_start is None or result.observation_end is None:
+        return None
+    days = (result.observation_end.date() - result.observation_start.date()).days
+    return days if days > 0 else None
+
+
+def daily_usage_for_window(
+    result: SparkAnalysis,
+    window_days: int | None,
+) -> list[SparkDailyUsage]:
+    if window_days is None or result.observation_end is None:
+        return []
+    end_day = result.observation_end.date()
+    start_day = end_day - timedelta(days=window_days)
+    return [
+        day for day in result.daily_usage
+        if start_day <= day.day < end_day
+    ]

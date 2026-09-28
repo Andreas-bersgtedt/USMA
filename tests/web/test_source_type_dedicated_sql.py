@@ -15,11 +15,9 @@ Dedicated SQL pool source type. Covers:
 """
 from __future__ import annotations
 
-import os
 import sys
 import types
 from pathlib import Path
-from unittest import mock
 from unittest.mock import MagicMock
 
 import pytest

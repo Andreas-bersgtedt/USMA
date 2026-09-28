@@ -8,13 +8,21 @@ import type {
   EstateWorkspace,
   FabricMappingReport,
   Recommendation,
+  SparkPoolsReport,
   Severity,
 } from "../types";
+import {
+  aggregateSparkWindow,
+  filterSparkDailyUsageToWindow,
+  getSparkSizingStatus,
+  sparkObservationWindowDays,
+} from "../lib/sparkAccounting";
 
 interface WorkspaceBundle {
   ws: EstateWorkspace;
   fm: FabricMappingReport | null;
   cost: CostReport | null;
+  spark: SparkPoolsReport | null;
 }
 
 function fmtNum(n: number | null | undefined, d = 0): string {
@@ -58,11 +66,12 @@ export default function PrintReport() {
         setReport(r);
         const results = await Promise.all(
           r.workspaces.map(async (ws) => {
-            const [fm, cost] = await Promise.all([
+            const [fm, cost, spark] = await Promise.all([
               apiGetRunModule<FabricMappingReport>(ws.latest_run_id, "fabric_mapping"),
               apiGetRunModule<CostReport>(ws.latest_run_id, "cost"),
+              apiGetRunModule<SparkPoolsReport>(ws.latest_run_id, "spark_pools"),
             ]);
-            return { ws, fm, cost } as WorkspaceBundle;
+            return { ws, fm, cost, spark } as WorkspaceBundle;
           }),
         );
         if (!cancelled) setBundles(results);
@@ -189,7 +198,19 @@ export default function PrintReport() {
                 </td>
                 <td className="num">{fmtCurrency(ws.actual_monthly_cost, ws.actual_currency)}</td>
                 <td className="num">{fmtCurrency(ws.fabric_estimated_monthly_cost, ws.actual_currency)}</td>
-                <td>{ws.recommended_fabric_sku ?? "—"}</td>
+                <td>
+                  {ws.recommended_fabric_sku ?? "—"}
+                  {(ws.capacity_warnings?.length ?? 0) > 0 && (
+                    <div>
+                      <span
+                        className="pill warn"
+                        title={ws.capacity_warnings?.join("\n")}
+                      >
+                        estimate caveat
+                      </span>
+                    </div>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -228,8 +249,8 @@ export default function PrintReport() {
         )}
       </section>
 
-      {bundles.map(({ ws, fm, cost }) => (
-        <WorkspacePage key={ws.key} ws={ws} fm={fm} cost={cost} />
+      {bundles.map(({ ws, fm, cost, spark }) => (
+        <WorkspacePage key={ws.key} ws={ws} fm={fm} cost={cost} spark={spark} />
       ))}
     </div>
   );
@@ -239,10 +260,12 @@ function WorkspacePage({
   ws,
   fm,
   cost,
+  spark,
 }: {
   ws: EstateWorkspace;
   fm: FabricMappingReport | null;
   cost: CostReport | null;
+  spark: SparkPoolsReport | null;
 }) {
   const rd = fm?.readiness;
   const cp = fm?.capacity_projection;
@@ -307,16 +330,40 @@ function WorkspacePage({
                     const pipeCu = cp.pipelines_cu_contribution ?? 0;
                     const slessCu = cp.serverless_cu_contribution ?? 0;
                     const slessPeakDayCuH = cp.serverless_peak_day_cu_hours ?? 0;
+                    const sparkSummary = aggregateSparkWindow(
+                      spark?.run_stats ?? [],
+                      undefined,
+                      !spark?.accounting_basis,
+                    );
+                    const sparkSizingCu = cp.spark_steady_state_cu !== undefined
+                      ? cp.spark_steady_state_cu
+                      : sparkSummary?.steadyStateCu ?? null;
+                    const sparkSizing = !spark && cp.spark_steady_state_cu === undefined
+                      ? { included: true, warning: null }
+                      : getSparkSizingStatus({
+                          accountingBasis: spark?.accounting_basis,
+                          collectionComplete: spark?.collection_complete,
+                          unknownUsageRunCount: sparkSummary?.unknownUsageRunCount ?? null,
+                          avgDailyCuHours: sparkSummary?.avgDailyCuHours ?? null,
+                          steadyStateCu: sparkSizingCu,
+                        });
                     const parts: string[] = [];
                     if (dwuCu > 0) parts.push(`DW ${fmtCu(dwuCu)}`);
-                    if (sparkCu > 0) parts.push(`Spark ${fmtCu(sparkCu)}`);
+                    if (sparkCu > 0 && sparkSizing.included) parts.push(`Spark ${fmtCu(sparkCu)}`);
                     if (pipeCu > 0) parts.push(`Pipelines ${fmtCu(pipeCu)}`);
                     if (slessCu > 0) parts.push(`Serverless ${fmtCu(slessCu)}`);
                     const breakdown = parts.length > 0 ? ` · ${parts.join(" + ")} CU` : "";
                     const slessNote = slessPeakDayCuH > 0
                       ? ` · Serverless peak day ≈ ${slessPeakDayCuH.toFixed(2)} CU-h (smoothed over 24 h)`
                       : "";
-                    return `${cp.estimated_cu.toFixed(1)} CU (${cp.headroom_pct}% headroom)${breakdown}${slessNote}`;
+                    const sparkWarnings = Array.from(new Set([
+                      ...(cp.spark_accounting_warnings ?? []),
+                      ...(sparkSizing.warning ? [sparkSizing.warning] : []),
+                    ]));
+                    const sparkWarning = sparkWarnings.length > 0
+                      ? ` · ${sparkWarnings.join(" · ")}`
+                      : "";
+                    return `${cp.estimated_cu.toFixed(1)} CU (${cp.headroom_pct}% headroom)${breakdown}${slessNote}${sparkWarning}`;
                   })()
                 : "no monitoring data"
             }
@@ -415,6 +462,8 @@ function WorkspacePage({
         </section>
       )}
 
+      <SparkAccountingPrintReport spark={spark} capacity={cp} />
+
       {fm?.runbook && fm.runbook.length > 0 && (
         <section className="report-section">
           <h2>Runbook ({fm.runbook.length} steps)</h2>
@@ -431,5 +480,160 @@ function WorkspacePage({
         </section>
       )}
     </div>
+  );
+}
+
+function SparkAccountingPrintReport({
+  spark,
+  capacity,
+}: {
+  spark: SparkPoolsReport | null;
+  capacity: FabricMappingReport["capacity_projection"];
+}) {
+  const warnings = Array.from(new Set([
+    ...(spark?.accounting_warnings ?? []),
+    ...(capacity?.spark_accounting_warnings ?? []),
+  ]));
+  if (!spark && warnings.length === 0 &&
+      !(capacity?.spark_steady_state_cu && capacity.spark_steady_state_cu > 0)) {
+    return null;
+  }
+
+  const totals = aggregateSparkWindow(
+    spark?.run_stats ?? [],
+    undefined,
+    !spark?.accounting_basis,
+  );
+  const sparkSizingCu = capacity?.spark_steady_state_cu !== undefined
+    ? capacity.spark_steady_state_cu
+    : totals?.steadyStateCu ?? null;
+  const sparkSizing = !spark && capacity?.spark_steady_state_cu === undefined
+    ? { included: true, warning: null }
+    : getSparkSizingStatus({
+        accountingBasis: spark?.accounting_basis,
+        collectionComplete: spark?.collection_complete,
+        unknownUsageRunCount: totals?.unknownUsageRunCount ?? null,
+        avgDailyCuHours: totals?.avgDailyCuHours ?? null,
+        steadyStateCu: sparkSizingCu,
+      });
+  const dailyWindowDays = totals?.windowDays ?? sparkObservationWindowDays(
+    spark?.observation_start,
+    spark?.observation_end,
+  );
+  const dailyUsage = filterSparkDailyUsageToWindow(
+    spark?.daily_usage,
+    spark?.observation_end,
+    dailyWindowDays,
+  );
+  const basis = spark?.accounting_basis?.trim() || "legacy or unavailable";
+  const fixedShape = /fixed.?shape|shape.?estimate/i.test(basis);
+  const coverage =
+    spark?.collection_complete === true
+      ? "complete"
+      : spark?.collection_complete === false
+        ? "incomplete"
+        : "unknown";
+  if (
+    coverage !== "complete" &&
+    !warnings.some((warning) => /coverage|missing telem/i.test(warning))
+  ) {
+    warnings.push(
+      coverage === "incomplete"
+        ? "Collection is incomplete; missing telemetry is not zero usage."
+        : "Collection coverage is unknown; missing telemetry is not zero usage.",
+    );
+  }
+  if (sparkSizing.warning && !warnings.includes(sparkSizing.warning)) {
+    warnings.push(sparkSizing.warning);
+  }
+
+  return (
+    <section className="report-section">
+      <h2>Spark accounting and coverage</h2>
+      <p className="small">
+        <strong>Basis:</strong>{" "}
+        {fixedShape
+          ? "fixed-shape estimate from recorded driver/executor shape and runtime; not measured billing"
+          : "resource-time estimate; not measured Synapse billing"}{" "}
+        <code>{basis}</code>
+      </p>
+      <p className="small">
+        <strong>Observation period:</strong>{" "}
+        {spark?.observation_start ?? "unknown"} – {spark?.observation_end ?? "unknown"}
+        {" · "}
+        <strong>Collection coverage:</strong> {coverage}
+      </p>
+      <p className="small">
+        Fabric Spark sizing assumption: 0.5 estimated CU-hours per accounted
+        vCore-hour (1 CU = 2 Spark vCores); this does not establish equal
+        performance or billed consumption.
+      </p>
+      <div className="grid cols-4">
+        <StatCard
+          label="Avg daily vCore-hours"
+          value={totals?.avgDailyVcoreHours == null
+            ? "—"
+            : fmtNum(totals.avgDailyVcoreHours, 2)}
+          sub={totals ? `${totals.windowDays}-day common run window` : "no common run window"}
+        />
+        <StatCard
+          label="Avg daily estimated CU-hours"
+          value={totals?.avgDailyCuHours == null
+            ? "—"
+            : fmtNum(totals.avgDailyCuHours, 2)}
+        />
+        <StatCard
+          label="Spark steady-state CU"
+          value={sparkSizing.included ? fmtNum(sparkSizingCu, 3) : "—"}
+          sub="pre-headroom; CU, not CU/day"
+        />
+        <StatCard
+          label="Known / unknown usage runs"
+          value={totals?.knownUsageRunCount != null &&
+              totals.unknownUsageRunCount != null
+            ? `${totals.knownUsageRunCount} / ${totals.unknownUsageRunCount}`
+            : "—"}
+        />
+        <StatCard
+          label="Peak-day Spark CU-hours"
+          value={capacity?.spark_peak_day_cu_hours == null
+            ? "—"
+            : fmtNum(capacity.spark_peak_day_cu_hours, 2)}
+          sub="diagnostic only; not the steady-state baseline"
+        />
+      </div>
+      {capacity?.spark_daily_cu_hours != null && (
+        <p className="small muted">
+          Capacity projection input: {fmtNum(capacity.spark_daily_cu_hours, 2)} estimated CU-hours/day
+          {capacity.spark_window_days != null ? ` over ${capacity.spark_window_days} observed days` : ""}
+          {capacity.headroom_pct != null ? ` · ${capacity.headroom_pct}% headroom is applied separately` : ""}.
+        </p>
+      )}
+      {warnings.length > 0 && (
+        <ul className="small">
+          {warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}
+        </ul>
+      )}
+      {dailyUsage.length > 0 && (
+        <table>
+          <thead>
+            <tr>
+              <th>UTC day ({dailyWindowDays}-day common/observation window)</th>
+              <th className="num">Accounted vCore-hours</th>
+              <th className="num">Estimated Fabric Spark CU-hours</th>
+            </tr>
+          </thead>
+          <tbody>
+            {dailyUsage.map((day) => (
+              <tr key={day.day}>
+                <td>{day.day}</td>
+                <td className="num">{fmtNum(day.total_vcore_hours, 2)}</td>
+                <td className="num">{fmtNum(day.est_cu_hours_fabric_spark, 2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
   );
 }

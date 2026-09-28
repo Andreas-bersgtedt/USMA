@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from usma.modules.spark_pools.spark_history_client import (
+    SparkHistoryClient,
     VCORE_HOURS_TO_CU_HOURS,
     _classify_trigger,
     _normalize,
@@ -15,8 +16,11 @@ from usma.modules.spark_pools.spark_history_client import (
 )
 from usma.modules.spark_pools.spark_run_stats import (
     aggregate_runs,
+    aggregate_daily_usage,
+    deduplicate_runs,
 )
-from usma.modules.spark_pools.models import SparkRunRecord
+from usma.modules.spark_pools.models import SparkAnalysis, SparkRunRecord
+from usma.modules.fabric_mapping.cu_projection import project_capacity
 
 
 # ----------------------------------------------------------- shape extraction
@@ -41,6 +45,14 @@ def test_vcore_shape_falls_back_to_creation_request():
 def test_vcore_shape_returns_none_when_unknown():
     dc, ec, nx = vcore_shape_from_app_info(None, None)
     assert (dc, ec, nx) == (None, None, None)
+
+
+def test_vcore_shape_uses_documented_sdk_request_fields():
+    dc, ec, nx = vcore_shape_from_app_info(
+        None,
+        SimpleNamespace(driver_cores=8, executor_cores=4, executor_count=6),
+    )
+    assert (dc, ec, nx) == (8, 4, 6)
 
 
 # -------------------------------------------------------------- vcore-second
@@ -245,9 +257,94 @@ def test_normalize_falls_back_to_plugin_timestamps():
     assert rec.outcome == "succeeded"
 
 
+def test_normalize_starts_usage_at_resource_acquisition_not_submission():
+    submitted = datetime(2026, 2, 1, 10, tzinfo=timezone.utc)
+    allocated = submitted + timedelta(hours=1)
+    ended = allocated + timedelta(hours=2)
+    raw = _make_sdk_run(
+        job_id=43,
+        submitted_at=submitted,
+        ended_at=ended,
+    )
+    raw.plugin = SimpleNamespace(resource_acquisition_started_at=allocated)
+    rec = _normalize(raw, kind="scheduled", pool="poolA")
+    assert rec is not None
+    assert rec.submitted_at == submitted
+    assert rec.accounting_start_at == allocated
+    assert rec.duration_seconds == pytest.approx(7200)
+    assert rec.vcore_hours == pytest.approx(56)
+    assert rec.usage_basis == "fixed_shape_estimate"
+
+
+def test_normalize_does_not_use_monitoring_started_as_end_time():
+    started = datetime(2026, 2, 1, 10, tzinfo=timezone.utc)
+    raw = _make_sdk_run(
+        job_id=44,
+        submitted_at=started,
+        ended_at=started + timedelta(hours=1),
+    )
+    raw.scheduler.ended_at = None
+    raw.plugin = SimpleNamespace(monitoring_started_at=started + timedelta(minutes=5))
+    rec = _normalize(raw, kind="scheduled", pool="poolA")
+    assert rec is not None
+    assert rec.ended_at is None
+    assert rec.duration_seconds is None
+    assert rec.usage_basis == "fixed_shape_estimate"
+
+
 def test_normalize_skips_run_without_id():
     raw = SimpleNamespace(id=None)
     assert _normalize(raw, kind="scheduled", pool="x") is None
+
+
+def test_normalize_uses_configuration_alias_and_preserves_app_info():
+    raw = _make_sdk_run(
+        job_id=45,
+        submitted_at=datetime(2026, 2, 1, 10, tzinfo=timezone.utc),
+        ended_at=datetime(2026, 2, 1, 11, tzinfo=timezone.utc),
+    )
+    raw.app_info = {
+        "driverCores": "4",
+        "executorCores": "8",
+        "numExecutors": "3",
+        "attemptId": "attempt_2",
+    }
+    raw.livy_info.job_creation_request = SimpleNamespace(
+        driver_cores=None,
+        executor_cores=None,
+        executor_count=None,
+        configuration={"spark.synapse.context.pipelinejobid": "pipeline-1"},
+    )
+    rec = _normalize(raw, kind="scheduled", pool="poolA", livy_kind="session")
+    assert rec is not None
+    assert rec.pipeline_job_id == "pipeline-1"
+    assert rec.app_info["attemptId"] == "attempt_2"
+
+
+def test_normalize_uses_documented_livy_lifecycle_timestamps():
+    submitted = datetime(2026, 2, 1, 10, tzinfo=timezone.utc)
+    allocated = submitted + timedelta(minutes=20)
+    ended = allocated + timedelta(hours=1)
+    raw = _make_sdk_run(
+        job_id=46,
+        submitted_at=submitted,
+        ended_at=ended,
+    )
+    raw.scheduler.ended_at = None
+    raw.plugin = None
+    raw.livy_info = SimpleNamespace(
+        running_at=allocated,
+        success_at=ended,
+        job_creation_request=SimpleNamespace(
+            driver_cores=4, executor_cores=8, executor_count=3,
+        ),
+    )
+    rec = _normalize(raw, kind="scheduled", pool="poolA", livy_kind="batch")
+    assert rec is not None
+    assert rec.accounting_start_at == allocated
+    assert rec.accounting_start_basis == "livy_running_at"
+    assert rec.ended_at == ended
+    assert rec.duration_seconds == pytest.approx(3600)
 
 
 # --------------------------------------------------------- trigger classification
@@ -433,6 +530,466 @@ def test_aggregate_runs_per_pool_per_kind_windowed():
 
 def test_aggregate_runs_empty_returns_empty_list():
     assert aggregate_runs([]) == []
+
+
+def test_complete_empty_collection_reports_covered_zero_usage():
+    now = datetime(2026, 4, 10, 0, tzinfo=timezone.utc)
+    stats = aggregate_runs(
+        [],
+        windows=(3,),
+        now=now,
+        collection_complete=True,
+        groups=(("poolA", "scheduled"), ("poolA", "interactive")),
+    )
+    assert [(item.pool, item.kind) for item in stats] == [
+        ("poolA", "interactive"),
+        ("poolA", "scheduled"),
+    ]
+    for pool_stats in stats:
+        window = pool_stats.windows[0]
+        assert window.run_count == 0
+        assert window.known_usage_run_count == 0
+        assert window.unknown_usage_run_count == 0
+        assert window.avg_daily_vcore_hours == 0
+        assert window.avg_daily_cu_hours == 0
+        assert window.steady_state_cu == 0
+
+
+def test_incomplete_empty_collection_does_not_claim_zero_usage():
+    now = datetime(2026, 4, 10, 0, tzinfo=timezone.utc)
+    stats = aggregate_runs(
+        [],
+        windows=(3,),
+        now=now,
+        collection_complete=False,
+        groups=(("poolA", "scheduled"),),
+    )
+    window = stats[0].windows[0]
+    assert window.run_count == 0
+    assert window.avg_daily_vcore_hours is None
+    assert window.avg_daily_cu_hours is None
+    assert window.steady_state_cu is None
+
+
+def test_aggregate_clips_pre_window_runs_and_splits_usage_across_utc_days():
+    end = datetime(2026, 4, 10, 0, tzinfo=timezone.utc)
+    crossing = SparkRunRecord(
+        livy_id=1,
+        kind="scheduled",
+        pool="A",
+        app_id="app-cross",
+        submitted_at=end - timedelta(days=7, hours=1),
+        accounting_start_at=end - timedelta(days=7, hours=1),
+        ended_at=end - timedelta(days=7) + timedelta(hours=1),
+        duration_seconds=7200,
+        total_vcores=32,
+        vcore_hours=64,
+        est_cu_hours_fabric_spark=32,
+        usage_basis="fixed_shape_estimate",
+    )
+    stats = aggregate_runs([crossing], windows=(7,), now=end)
+    window = stats[0].windows[0]
+    assert window.run_count == 1
+    assert window.total_vcore_hours == pytest.approx(32)
+    assert window.avg_daily_vcore_hours == pytest.approx(32 / 7)
+    assert window.avg_daily_cu_hours == pytest.approx(16 / 7)
+    assert window.steady_state_cu == pytest.approx(16 / (7 * 24))
+    daily = aggregate_daily_usage(
+        [crossing],
+        start=end - timedelta(days=7),
+        end=end,
+    )
+    assert len(daily) == 7
+    assert daily[0].day.isoformat() == (end - timedelta(days=7)).date().isoformat()
+    assert sum(row.total_vcore_hours for row in daily) == pytest.approx(32)
+
+
+def test_deduplicate_uses_application_attempt_and_endpoint_scoped_livy_fallback():
+    submitted = datetime(2026, 4, 1, tzinfo=timezone.utc)
+    first = _rec(pool="A", kind="scheduled", submitted_at=submitted)
+    first = first.model_copy(update={
+        "app_id": "application-1",
+        "app_info": {"attemptId": "attempt-1"},
+        "source_endpoint": "session",
+    })
+    duplicate = first.model_copy(update={"source_endpoint": "batch"})
+    retry = first.model_copy(update={
+        "app_info": {"attemptId": "attempt-2"},
+        "livy_id": 2,
+    })
+    same_numeric_id = first.model_copy(update={
+        "app_id": None,
+        "app_info": {},
+        "source_endpoint": "batch",
+        "livy_id": 7,
+    })
+    other_endpoint = same_numeric_id.model_copy(update={
+        "source_endpoint": "session",
+    })
+    unique = deduplicate_runs([first, duplicate, retry, same_numeric_id, other_endpoint])
+    assert len(unique) == 4
+    assert {run.app_info.get("attemptId") for run in unique if run.app_id} == {
+        "attempt-1", "attempt-2",
+    }
+
+
+def test_distinct_application_attempts_are_additive_and_missing_app_ids_keep_endpoint_scope():
+    submitted = datetime(2026, 4, 1, tzinfo=timezone.utc)
+    attempt_one = _rec(
+        pool="A", kind="scheduled", submitted_at=submitted, duration_s=3600,
+        vcores=32,
+    ).model_copy(update={
+        "app_id": "application-1",
+        "app_info": {"attemptId": "attempt-1"},
+        "source_endpoint": "session",
+    })
+    attempt_two = attempt_one.model_copy(update={
+        "app_info": {"attemptId": "attempt-2"},
+        "livy_id": 2,
+    })
+    no_app_batch = attempt_one.model_copy(update={
+        "app_id": None,
+        "app_info": {},
+        "source_endpoint": "batch",
+        "livy_id": 9,
+    })
+    no_app_session = no_app_batch.model_copy(update={"source_endpoint": "session"})
+    records = deduplicate_runs([
+        attempt_one, attempt_two, no_app_batch, no_app_session,
+    ])
+    assert len(records) == 4
+    stats = aggregate_runs(
+        records,
+        windows=(7,),
+        now=submitted + timedelta(days=1),
+    )
+    scheduled = next(item for item in stats if item.kind == "scheduled").windows[0]
+    assert scheduled.run_count == 4
+    assert scheduled.known_usage_run_count == 4
+    assert scheduled.total_vcore_hours == pytest.approx(128)
+    assert scheduled.est_cu_hours_fabric_spark == pytest.approx(64)
+
+
+def test_history_paging_does_not_stop_before_old_overlapping_runs():
+    start = datetime(2026, 4, 10, tzinfo=timezone.utc)
+    old_finished = _make_sdk_run(
+        job_id=1,
+        submitted_at=start - timedelta(days=5),
+        ended_at=start - timedelta(days=4),
+    )
+    long_running = _make_sdk_run(
+        job_id=2,
+        submitted_at=start - timedelta(days=8),
+        ended_at=start + timedelta(hours=1),
+    )
+    client = SparkHistoryClient.__new__(SparkHistoryClient)
+    client._collection_status = {}
+    client._client = lambda pool_name: SimpleNamespace(close=lambda: None)
+    pages = [
+        SimpleNamespace(sessions=[old_finished], total=2),
+        SimpleNamespace(sessions=[long_running], total=2),
+        SimpleNamespace(sessions=[], total=2),
+    ]
+    iterator = client._iter(
+        "poolA",
+        livy_kind="session",
+        list_fn=lambda _client, _offset, _size: pages.pop(0),
+        sessions_field="sessions",
+        start=start,
+        limit=10,
+        page_size=1,
+    )
+    runs = list(iterator)
+    assert [run.livy_id for run in runs] == [2]
+    assert client.collection_status("poolA", "session") is True
+
+
+def test_history_paging_marks_limit_truncation_incomplete():
+    start = datetime(2026, 4, 10, tzinfo=timezone.utc)
+    record = _make_sdk_run(
+        job_id=1,
+        submitted_at=start,
+        ended_at=start + timedelta(minutes=1),
+    )
+    second_record = _make_sdk_run(
+        job_id=2,
+        submitted_at=start + timedelta(minutes=2),
+        ended_at=start + timedelta(minutes=3),
+    )
+    client = SparkHistoryClient.__new__(SparkHistoryClient)
+    client._collection_status = {}
+    client._client = lambda pool_name: SimpleNamespace(close=lambda: None)
+    pages = [SimpleNamespace(sessions=[record, second_record], total=3)]
+    runs = list(client._iter(
+        "poolA",
+        livy_kind="session",
+        list_fn=lambda _client, _offset, _size: pages[0],
+        sessions_field="sessions",
+        start=start,
+        limit=1,
+        page_size=2,
+    ))
+    assert len(runs) == 1
+    assert client.collection_status("poolA", "session") is False
+
+
+def test_empty_history_is_complete_when_server_reports_zero():
+    client = SparkHistoryClient.__new__(SparkHistoryClient)
+    client._collection_status = {}
+    client._client = lambda _pool: SimpleNamespace(close=lambda: None)
+    runs = list(client._iter(
+        "poolA",
+        livy_kind="session",
+        list_fn=lambda _client, _offset, _size: SimpleNamespace(sessions=[], total=0),
+        sessions_field="sessions",
+        start=datetime(2026, 4, 10, tzinfo=timezone.utc),
+        limit=10,
+        page_size=20,
+    ))
+    assert runs == []
+    assert client.collection_status("poolA", "session") is True
+
+
+def test_empty_page_with_nonzero_server_total_is_incomplete():
+    client = SparkHistoryClient.__new__(SparkHistoryClient)
+    client._collection_status = {}
+    client._client = lambda _pool: SimpleNamespace(close=lambda: None)
+    runs = list(client._iter(
+        "poolA",
+        livy_kind="session",
+        list_fn=lambda _client, _offset, _size: SimpleNamespace(sessions=[], total=5),
+        sessions_field="sessions",
+        start=datetime(2026, 4, 10, tzinfo=timezone.utc),
+        limit=10,
+        page_size=20,
+    ))
+    assert runs == []
+    assert client.collection_status("poolA", "session") is False
+
+
+def test_paging_exception_is_not_reported_as_complete():
+    client = SparkHistoryClient.__new__(SparkHistoryClient)
+    client._collection_status = {}
+    client._client = lambda _pool: SimpleNamespace(close=lambda: None)
+
+    def fail(_client, _offset, _size):
+        raise RuntimeError("paging failed")
+
+    with pytest.raises(RuntimeError, match="paging failed"):
+        list(client._iter(
+            "poolA",
+            livy_kind="batch",
+            list_fn=fail,
+            sessions_field="sessions",
+            start=datetime(2026, 4, 10, tzinfo=timezone.utc),
+            limit=10,
+            page_size=20,
+        ))
+    assert client.collection_status("poolA", "batch") is False
+
+
+def test_terminal_run_missing_end_across_window_is_unknown_not_excluded():
+    now = datetime(2026, 4, 10, 0, tzinfo=timezone.utc)
+    submitted = now - timedelta(days=8)
+    terminal_without_end = SparkRunRecord(
+        livy_id=4,
+        kind="scheduled",
+        pool="A",
+        app_id="application-missing-end",
+        submitted_at=submitted,
+        accounting_start_at=submitted,
+        outcome="succeeded",
+        total_vcores=32,
+        usage_basis="fixed_shape_estimate",
+    )
+    stats = aggregate_runs(
+        [terminal_without_end],
+        windows=(7,),
+        now=now,
+    )[0].windows[0]
+    assert stats.run_count == 1
+    assert stats.known_usage_run_count == 0
+    assert stats.unknown_usage_run_count == 1
+    assert stats.total_vcore_hours == 0
+    assert stats.avg_daily_vcore_hours is None
+
+
+def test_aggregate_unknown_shape_is_reported_not_counted_as_zero_usage():
+    now = datetime(2026, 4, 10, 0, tzinfo=timezone.utc)
+    unknown = SparkRunRecord(
+        livy_id=3,
+        kind="scheduled",
+        pool="A",
+        submitted_at=now - timedelta(days=1),
+        ended_at=now - timedelta(days=1) + timedelta(hours=1),
+    )
+    stats = aggregate_runs([unknown], windows=(7,), now=now)[0].windows[0]
+    assert stats.run_count == 1
+    assert stats.known_usage_run_count == 0
+    assert stats.unknown_usage_run_count == 1
+    assert stats.avg_daily_vcore_hours is None
+
+
+def test_collected_runs_aggregate_and_serialize_accounting_contract():
+    observation_end = datetime(2026, 4, 10, 0, tzinfo=timezone.utc)
+    observation_start = observation_end - timedelta(days=3)
+    allocated = observation_end - timedelta(hours=1)
+    ended = observation_end + timedelta(hours=1)
+
+    def sdk_record(
+        *,
+        livy_id: int,
+        app_id: str,
+        driver_cores: int,
+        executor_cores: int,
+        num_executors: int,
+        attempt_id: str,
+    ) -> SimpleNamespace:
+        app_info = {
+            "driverCores": str(driver_cores),
+            "executorCores": str(executor_cores),
+            "numExecutors": str(num_executors),
+            "attemptId": attempt_id,
+        }
+        return SimpleNamespace(
+            id=livy_id,
+            app_id=app_id,
+            app_info=app_info,
+            name="job",
+            state="success",
+            result="Succeeded",
+            scheduler=SimpleNamespace(
+                submitted_at=allocated - timedelta(minutes=10),
+                scheduled_at=None,
+                ended_at=ended,
+            ),
+            plugin=SimpleNamespace(resource_acquisition_started_at=allocated),
+            livy_info=SimpleNamespace(
+                running_at=None,
+                success_at=None,
+                job_creation_request=SimpleNamespace(
+                    driver_cores=driver_cores,
+                    executor_cores=executor_cores,
+                    executor_count=num_executors,
+                    configuration={},
+                ),
+            ),
+            tags={},
+        )
+
+    client = SparkHistoryClient.__new__(SparkHistoryClient)
+    client._collection_status = {}
+    client._client = lambda _pool: SimpleNamespace(close=lambda: None)
+    sdk_records = [
+        sdk_record(
+            livy_id=7,
+            app_id="application-7",
+            driver_cores=8,
+            executor_cores=8,
+            num_executors=3,
+            attempt_id="attempt-1",
+        ),
+        sdk_record(
+            livy_id=8,
+            app_id="application-8",
+            driver_cores=4,
+            executor_cores=4,
+            num_executors=3,
+            attempt_id="attempt-1",
+        ),
+    ]
+
+    def collect(endpoint: str) -> list[SparkRunRecord]:
+        response = SimpleNamespace(sessions=sdk_records, total=len(sdk_records))
+        return list(client._iter(
+            "poolA",
+            livy_kind=endpoint,  # type: ignore[arg-type]
+            list_fn=lambda _client, _offset, _size: response,
+            sessions_field="sessions",
+            start=observation_start,
+            limit=10,
+            page_size=20,
+        ))
+
+    collected = collect("batch") + collect("session")
+    unique_runs = deduplicate_runs(collected)
+    stats = aggregate_runs(
+        unique_runs,
+        windows=(3,),
+        now=observation_end,
+        collection_complete=True,
+    )
+    daily = aggregate_daily_usage(
+        unique_runs,
+        start=observation_start,
+        end=observation_end,
+    )
+    analysis = SparkAnalysis(
+        workspace_name="workspace",
+        subscription_id="subscription",
+        resource_group="group",
+        generated_at=observation_end,
+        spark_runs=unique_runs,
+        run_stats=stats,
+        accounting_basis=(
+            "fixed_shape_estimate_from_livy_history; "
+            "no executor allocation timeline is exposed by the current API"
+        ),
+        observation_start=observation_start,
+        observation_end=observation_end,
+        collection_complete=all(
+            client.collection_status("poolA", endpoint) is True
+            for endpoint in ("batch", "session")
+        ),
+        accounting_warnings=["Fixed-shape estimate; not measured allocation."],
+        daily_usage=daily,
+    )
+
+    payload = analysis.to_dict()
+    assert len(payload["spark_runs"]) == 2
+    assert payload["spark_runs"][0]["source_endpoint"] == "batch"
+    assert payload["spark_runs"][0]["app_info"]["attemptId"] == "attempt-1"
+    assert payload["observation_start"] == "2026-04-07T00:00:00Z"
+    assert payload["observation_end"] == "2026-04-10T00:00:00Z"
+    assert payload["collection_complete"] is True
+    assert payload["accounting_basis"].startswith("fixed_shape_estimate")
+    assert payload["accounting_warnings"] == [
+        "Fixed-shape estimate; not measured allocation."
+    ]
+    assert [row["day"] for row in payload["daily_usage"]] == [
+        "2026-04-07", "2026-04-08", "2026-04-09",
+    ]
+    assert [row["total_vcore_hours"] for row in payload["daily_usage"]] == [
+        0.0, 0.0, pytest.approx(48),
+    ]
+    assert [row["est_cu_hours_fabric_spark"] for row in payload["daily_usage"]] == [
+        0.0, 0.0, pytest.approx(24),
+    ]
+    window = payload["run_stats"][0]["windows"][0]
+    assert window["window_days"] == 3
+    assert window["run_count"] == 2
+    assert window["known_usage_run_count"] == 2
+    assert window["unknown_usage_run_count"] == 0
+    assert window["total_vcore_hours"] == pytest.approx(48)
+    assert window["est_cu_hours_fabric_spark"] == pytest.approx(24)
+    assert window["avg_daily_vcore_hours"] == pytest.approx(48 / 3)
+    assert window["avg_daily_cu_hours"] == pytest.approx(24 / 3)
+    assert window["steady_state_cu"] == pytest.approx(24 / (3 * 24))
+
+    projection = project_capacity([], spark_payload=payload, headroom_pct=0)
+    assert projection is not None
+    assert projection.spark_window_days == 3
+    assert projection.spark_daily_cu_hours == pytest.approx(24 / 3)
+    assert projection.spark_steady_state_cu == pytest.approx(24 / 3 / 24)
+    assert projection.spark_peak_day_cu_hours == pytest.approx(24)
+
+    incomplete_payload = dict(payload)
+    incomplete_payload["collection_complete"] = False
+    assert project_capacity(
+        [],
+        spark_payload=incomplete_payload,
+        headroom_pct=0,
+    ) is None
 
 
 def test_cu_hours_mapping_constant_is_one_half():
