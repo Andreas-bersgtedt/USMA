@@ -20,10 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-import pytest
 
 from usma.config import AppConfig, AzureConfig, SourceDescriptor, SqlConfig
-from usma.modules.monitoring import monitor_client as mc
 from usma.modules.monitoring.analyzer import MonitoringAnalyzer
 from usma.modules.monitoring.monitor_client import (
     STANDALONE_DWU_POOL_METRICS,

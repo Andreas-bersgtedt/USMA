@@ -8,7 +8,6 @@ labels \u2014 so these tests are guardrails against future regressions.
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 from usma.config import AppConfig, AzureConfig, SqlConfig
