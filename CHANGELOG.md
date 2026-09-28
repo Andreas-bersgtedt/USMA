@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.5.0] - 2026-09-28
+
 ### Fixed
 - Synapse Spark capacity projection now uses total estimated CU-hours divided
   by observation days and 24 for steady-state CU, summing all pool/trigger
